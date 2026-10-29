@@ -28,7 +28,7 @@ The connected Supabase workspace currently has a project called `VaultWire` whos
 4. Apply `supabase/migrations/20261026000000_sde_orbit_app_state.sql` to that dedicated project's database.
 5. Enable the desired email/password sign-in method in Supabase Auth. If email confirmation is enabled, configure native deep links before expecting email confirmation links to open the installed Android app.
 
-When these values are absent, the React app intentionally starts in demo mode and stores data in local browser/app storage. This is not uninstall-safe cloud storage. Cloud persistence becomes available only after the new project, migration, and environment configuration are set up.
+When these values are absent, the app displays a setup screen and never falls back to demo or device-only data. Cloud persistence is available only after the project, migration, and environment configuration are set up.
 
 ## Run the web development version
 

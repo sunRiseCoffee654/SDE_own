@@ -3,6 +3,40 @@ export type Task = { id: string; title: string; description: string; dueDate: st
 export type Note = { id: string; title: string; content: string; topicId: string; pinned: boolean; updatedAt: string };
 export type ReminderEvent = { id: string; kind: 'completed' | 'skipped' | 'snoozed' | 'disabled' | 'paused'; reason: string; createdAt: string };
 export type StudySession = { id: string; topicId: string; startedAt: string; durationMinutes: number; completed: boolean };
+export type ApplicationStatus = 'Applied' | 'Screening' | 'Interviewing' | 'Offer' | 'Rejected';
+export type ProjectStatus = 'Active' | 'Completed' | 'In Progress' | 'Archived';
+
+export type PortfolioProject = {
+  id: string;
+  title: string;
+  tagline: string;
+  summary: string;
+  githubUrl: string;
+  liveUrl?: string;
+  techStack: string[];
+  status: ProjectStatus;
+  featured?: boolean;
+  challenges?: string;
+  starStory?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ResumeApplication = {
+  id: string;
+  company: string;
+  role: string;
+  whereApplied: string;
+  appliedDate: string;
+  status: ApplicationStatus;
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+  fileData?: string; // base64 data URL
+  notes?: string;
+  createdAt: string;
+};
+
 export type AppState = {
   topicStatus: Record<string, 'Not Started' | 'In Progress' | 'Needs Revision' | 'Mastered'>;
   tasks: Task[];
@@ -11,23 +45,20 @@ export type AppState = {
   reminderHistory: ReminderEvent[];
   sessions: StudySession[];
   journal: { id: string; date: string; content: string }[];
+  resumes: ResumeApplication[];
+  projects: PortfolioProject[];
 };
 
 export const defaultState: AppState = {
-  topicStatus: { 'p1-t1': 'In Progress', 'p1-t2': 'Mastered', 'p2-t1': 'In Progress', 'p3-t1': 'Needs Revision', 'p4-t1': 'Not Started' },
-  tasks: [
-    { id: 'seed-task-1', title: 'Review Git branching & merge conflicts', description: 'Practise on a throwaway repository', dueDate: new Date().toISOString().slice(0, 10), priority: 'High', topicId: 'p1-t1', done: false, createdAt: new Date().toISOString() },
-    { id: 'seed-task-2', title: 'Solve 2 array problems', description: 'Focus on the two-pointer pattern', dueDate: new Date().toISOString().slice(0, 10), priority: 'Medium', topicId: 'p2-t1', done: false, createdAt: new Date().toISOString() },
-    { id: 'seed-task-3', title: 'Make concise HTTP notes', description: 'Methods, status codes, headers', dueDate: '', priority: 'Low', topicId: 'p3-t5', done: true, createdAt: new Date().toISOString() },
-  ],
-  notes: [
-    { id: 'seed-note-1', title: 'Things to remember', content: 'Keep commits focused. Explain the reason behind a change, not just what changed.\n\nNext: practise resolving a merge conflict.', topicId: 'p1-t1', pinned: true, updatedAt: new Date().toISOString() },
-    { id: 'seed-note-2', title: 'DSA mistakes log', content: 'Check constraints before picking an approach. Test empty input, one item, duplicates and maximum constraints.', topicId: 'p2-t4', pinned: false, updatedAt: new Date().toISOString() },
-  ],
+  topicStatus: {},
+  tasks: [],
+  notes: [],
   reminders: { enabled: false, intervalMinutes: 60, startTime: '09:00', endTime: '21:00', quietHours: true },
   reminderHistory: [],
   sessions: [],
   journal: [],
+  resumes: [],
+  projects: [],
 };
 
 export const makeId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;

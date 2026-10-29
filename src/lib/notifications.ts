@@ -2,6 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
 const BASE_ID = 7400;
+const SNOOZE_ID = BASE_ID - 1;
 
 export async function enableNotifications() {
   if (Capacitor.isNativePlatform()) {
@@ -19,7 +20,7 @@ export async function scheduleNativeReminders(intervalMinutes: number, startTime
   if (!Capacitor.isNativePlatform()) return;
   try {
     const old = await LocalNotifications.getPending();
-    await LocalNotifications.cancel({ notifications: old.notifications.filter((n) => n.id >= BASE_ID && n.id < BASE_ID + 100) });
+    await LocalNotifications.cancel({ notifications: old.notifications.filter((n) => n.id >= SNOOZE_ID && n.id < BASE_ID + 100) });
     const now = new Date();
     const [sh, sm] = startTime.split(':').map(Number);
     const [eh, em] = endTime.split(':').map(Number);
@@ -45,6 +46,36 @@ export async function scheduleNativeReminders(intervalMinutes: number, startTime
     if (notifications.length) await LocalNotifications.schedule({ notifications });
   } catch (error) {
     console.warn('Could not schedule local reminders:', error);
+  }
+}
+
+export async function cancelNativeReminders() {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    const old = await LocalNotifications.getPending();
+    const orbitNotifications = old.notifications.filter((notification) => notification.id >= SNOOZE_ID && notification.id < BASE_ID + 100);
+    if (orbitNotifications.length) await LocalNotifications.cancel({ notifications: orbitNotifications });
+  } catch (error) {
+    console.warn('Could not cancel local reminders:', error);
+  }
+}
+
+export async function scheduleNativeSnooze() {
+  if (!Capacitor.isNativePlatform()) return false;
+  try {
+    await LocalNotifications.schedule({
+      notifications: [{
+        id: SNOOZE_ID,
+        title: 'SDE Orbit check-in ⏰',
+        body: 'Your 15-minute snooze is over.',
+        schedule: { at: new Date(Date.now() + 15 * 60_000) },
+        extra: { route: 'reminder' },
+      }],
+    });
+    return true;
+  } catch (error) {
+    console.warn('Could not schedule snooze:', error);
+    return false;
   }
 }
 
