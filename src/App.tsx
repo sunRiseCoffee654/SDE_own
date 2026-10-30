@@ -12,7 +12,7 @@ import {
   Clock3, Cloud, CloudOff, Code2, Coffee, Copy, Download, ExternalLink, FileText, Flame, FolderGit2, FolderKanban, Focus,
   Github, Globe, GraduationCap, HeartPulse, Home, Layers3, ListTodo, LoaderCircle, LockKeyhole, LogOut, MoreHorizontal,
   NotebookPen, Paperclip, Pin, Plus, Rocket, Search, Settings2, ShieldCheck, Sparkles, Star, Target, Timer,
-  Trash2, Trophy, UploadCloud, X, Zap,
+  Trash2, Trophy, UploadCloud, User, X, Zap,
 } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import { cloudConfigured, supabase, CLOUD_TABLE } from './lib/supabase';
@@ -610,13 +610,28 @@ export default function App() {
       <Box className="app-topbar">
         <Box className="brand-lockup" onClick={() => setActiveTab('home')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTab('home'); } }} role="button" tabIndex={0}>
           <Box className="brand-mark small"><OrbitMark /></Box>
-          <Box><Typography className="brand-name">sde orbit<span>.</span></Typography><Typography className="brand-caption">YOUR LEARNING SPACE</Typography></Box>
+          <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+            <Typography className="brand-name">sde orbit<span>.</span></Typography>
+            <Typography className="brand-caption">YOUR LEARNING SPACE</Typography>
+          </Box>
         </Box>
-        <Stack direction="row" spacing={0.8} alignItems="center" sx={{ flexShrink: 0 }}>
-          <Tooltip title={syncStatusLabel(syncStatus, isGuest)}><Box className={`sync-pill sync-${isGuest ? 'synced' : syncStatus}`}><span className="sync-dot" />{syncStatusLabel(syncStatus, isGuest)}</Box></Tooltip>
-          <IconButton className="top-icon" onClick={() => setSettingsOpen(true)} aria-label="Settings"><Settings2 size={19} /></IconButton>
-          <Tooltip title="Account settings">
-            <IconButton className="profile-button" onClick={() => setSettingsOpen(true)} aria-label="Open account settings">
+        <Stack direction="row" spacing={{ xs: 0.8, sm: 1.2 }} alignItems="center" sx={{ flexShrink: 0 }}>
+          <Tooltip title={syncStatusLabel(syncStatus, isGuest)}>
+            <Box className={`sync-pill sync-${isGuest ? 'synced' : syncStatus}`}>
+              <span className="sync-dot" />
+              <span>{syncStatusLabel(syncStatus, isGuest)}</span>
+            </Box>
+          </Tooltip>
+          <IconButton
+            className="top-icon"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Settings"
+            sx={{ display: { xs: 'none', sm: 'inline-flex' } }}
+          >
+            <Settings2 size={18} />
+          </IconButton>
+          <Tooltip title="Profile & Settings">
+            <IconButton className="profile-button" onClick={() => setSettingsOpen(true)} aria-label="Open profile & settings">
               <Avatar className="profile-avatar">{session.user.email?.slice(0, 1).toUpperCase() || 'V'}</Avatar>
             </IconButton>
           </Tooltip>
@@ -659,7 +674,27 @@ export default function App() {
 
       <TaskDialog open={taskDialog} initial={editingTask} onClose={() => { setTaskDialog(false); setEditingTask(null); }} onSave={saveTask} />
       <NoteDialog open={noteDialog} initial={editingNote} onClose={() => { setNoteDialog(false); setEditingNote(null); }} onSave={saveNote} />
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} state={state} syncStatus={syncStatus} isGuest={isGuest} onToggle={toggleReminders} onInterval={updateInterval} onTimes={async (startTime, endTime) => { updateState((old) => ({ ...old, reminders: { ...old.reminders, startTime, endTime } })); if (state.reminders.enabled && startTime < endTime) await scheduleNativeReminders(state.reminders.intervalMinutes, startTime, endTime); }} onHistory={() => { setSettingsOpen(false); setHistoryOpen(true); }} onResumes={() => { setSettingsOpen(false); setResumesOpen(true); }} onProjects={() => { setSettingsOpen(false); setActiveTab('projects'); }} onLogout={logout} />
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        state={state}
+        syncStatus={syncStatus}
+        isGuest={isGuest}
+        userEmail={session.user.email || 'Guest Explorer'}
+        streak={streak}
+        totalMinutes={totalMinutes}
+        masteredCount={masteredCount}
+        onToggle={toggleReminders}
+        onInterval={updateInterval}
+        onTimes={async (startTime, endTime) => {
+          updateState((old) => ({ ...old, reminders: { ...old.reminders, startTime, endTime } }));
+          if (state.reminders.enabled && startTime < endTime) await scheduleNativeReminders(state.reminders.intervalMinutes, startTime, endTime);
+        }}
+        onHistory={() => { setSettingsOpen(false); setHistoryOpen(true); }}
+        onResumes={() => { setSettingsOpen(false); setResumesOpen(true); }}
+        onProjects={() => { setSettingsOpen(false); setActiveTab('projects'); }}
+        onLogout={logout}
+      />
       <ProjectFormDialog open={projectDialog} initial={editingProject} onClose={() => { setProjectDialog(false); setEditingProject(null); }} onSave={saveProject} />
       <ResumesDialog open={resumesOpen} state={state} onClose={() => setResumesOpen(false)} onAddNew={() => { setEditingResume(null); setResumeDialog(true); }} onEdit={(item) => { setEditingResume(item); setResumeDialog(true); }} onDelete={deleteResumeApplication} />
       <ResumeFormDialog open={resumeDialog} initial={editingResume} onClose={() => { setResumeDialog(false); setEditingResume(null); }} onSave={saveResumeApplication} />
@@ -680,75 +715,371 @@ function SectionHeading({ eyebrow, title, subtitle, action }: { eyebrow?: string
   return <Box className="section-heading hero-animate"><Box>{eyebrow && <Typography className="eyebrow">{eyebrow}</Typography>}<Typography variant="h1">{title}</Typography>{subtitle && <Typography color="text.secondary" sx={{ mt: 0.65 }}>{subtitle}</Typography>}</Box>{action}</Box>;
 }
 
-function Dashboard({ state, progress, mastered, totalTopics, inProgress, revision, todaysTasks, completedToday, totalMinutes, streak, onGo, onSettings, onTopicStatus, onTaskToggle, onReminder }: { state: AppState; progress: number; mastered: number; totalTopics: number; inProgress: number; revision: number; todaysTasks: Task[]; completedToday: number; totalMinutes: number; streak: number; onGo: (tab: TabId) => void; onSettings: () => void; onTopicStatus: (id: string, status: AppState['topicStatus'][string]) => void; onTaskToggle: (id: string) => void; onReminder: () => void }) {
-  const nextTask = todaysTasks[0];
+function Dashboard({
+  state,
+  progress,
+  mastered,
+  totalTopics,
+  inProgress,
+  revision,
+  todaysTasks,
+  completedToday,
+  totalMinutes,
+  streak,
+  onGo,
+  onSettings,
+  onTopicStatus,
+  onTaskToggle,
+  onReminder,
+}: {
+  state: AppState;
+  progress: number;
+  mastered: number;
+  totalTopics: number;
+  inProgress: number;
+  revision: number;
+  todaysTasks: Task[];
+  completedToday: number;
+  totalMinutes: number;
+  streak: number;
+  onGo: (tab: TabId) => void;
+  onSettings: () => void;
+  onTopicStatus: (id: string, status: AppState['topicStatus'][string]) => void;
+  onTaskToggle: (id: string) => void;
+  onReminder: () => void;
+}) {
   const currentPhase = phases.find((phase) => phase.topics.some((topic) => state.topicStatus[topic.id] === 'In Progress')) || phases[0];
   const phaseDone = currentPhase.topics.filter((topic) => state.topicStatus[topic.id] === 'Mastered').length;
-  return <Box>
-    <Box className="hero-copy hero-animate" sx={{ mb: 2.3 }}>
-      <Box><Typography color="text.secondary" className="date-line"><CalendarDays size={14} /> {relativeDate()}</Typography><Typography variant="h1" sx={{ mt: 1 }}>{timeGreeting()},<br /><span className="gradient-text">let’s make progress.</span></Typography><Typography color="text.secondary" sx={{ mt: 1, maxWidth: 460, lineHeight: 1.6 }}>A little momentum every day adds up. Your next step is right here.</Typography></Box>
-      <Box className="hero-orbit-art"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="orbit-core"><OrbitMark /></div><span className="orbit-spark spark-one">✦</span><span className="orbit-spark spark-two">✧</span></Box>
-    </Box>
+  const phaseProgress = percent(phaseDone, currentPhase.topics.length);
 
-    {state.reminders.enabled && <Paper className="reminder-banner hero-animate" elevation={0} onClick={onReminder} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onReminder(); } }} role="button" tabIndex={0}>
-      <Box className="reminder-icon"><Bell size={19} /></Box><Box sx={{ flex: 1, minWidth: 0 }}><Typography fontWeight={800}>Quick check-in</Typography><Typography variant="body2" color="text.secondary">How's your focus? Tap to log a response.</Typography></Box><ArrowRight size={19} />
-    </Paper>}
-
-    <Box className="stats-grid hero-animate">
-      <Paper className="stat-card progress-stat" elevation={0}>
-        <Box className="stat-top"><span>SYLLABUS MASTERY</span><span className="stat-icon"><GraduationCap size={17} /></span></Box>
-        <Box className="progress-stat-main"><Box className="progress-ring" style={{ ['--progress' as string]: `${progress * 3.6}deg` }}><Box className="progress-ring-inner"><strong>{progress}%</strong><span>done</span></Box></Box><Box className="progress-stat-copy"><Typography variant="h3">You're moving.</Typography><Typography variant="body2" color="text.secondary">{mastered} of {totalTopics} topics mastered</Typography><Button size="small" endIcon={<ArrowUpRight size={15} />} onClick={() => onGo('syllabus')}>View syllabus</Button></Box></Box>
-      </Paper>
-      <Paper className="stat-card" elevation={0}><Box className="stat-top"><span>STUDY TIME</span><span className="stat-icon mint"><Clock3 size={17} /></span></Box><Typography className="big-stat">{Math.floor(totalMinutes / 60)}<small>h</small> {totalMinutes % 60}<small>m</small></Typography><Typography color="text.secondary" variant="body2">Total logged focus time</Typography><Box className="micro-bars">{[28, 45, 36, 72, 49, 86, Math.min(100, Math.max(18, totalMinutes % 100))].map((height, i) => <span key={i} style={{ height: `${height}%` }} />)}</Box></Paper>
-      <Paper className="stat-card" elevation={0}><Box className="stat-top"><span>STREAK</span><span className="stat-icon peach"><Flame size={17} /></span></Box><Typography className="big-stat">{streak}<small> days</small></Typography><Typography color="text.secondary" variant="body2">Show up, even for a little.</Typography><Box className="streak-dots">{['M','T','W','T','F','S','S'].map((d, i) => <span key={`${d}-${i}`} className={i < Math.min(streak, 7) ? 'lit' : ''}>{d}</span>)}</Box></Paper>
-      <Paper className="stat-card" elevation={0}><Box className="stat-top"><span>TOPIC STATUS</span><span className="stat-icon violet"><Activity size={17} /></span></Box><Box className="status-stats"><Box><strong>{inProgress}</strong><span>In progress</span></Box><Box><strong>{revision}</strong><span>Revise</span></Box><Box><strong>{totalTopics - inProgress - revision - mastered}</strong><span>To learn</span></Box></Box><Button size="small" onClick={() => onGo('syllabus')} endIcon={<ArrowRight size={15} />}>Manage topics</Button></Paper>
-    </Box>
-
-    <Box className="dashboard-columns">
-      <Box className="dashboard-main-col">
-        <Box className="inline-section-header hero-animate"><Box><Typography variant="h2">Today’s focus</Typography><Typography color="text.secondary" variant="body2" sx={{ mt: 0.5 }}>Small wins count. Pick one and begin.</Typography></Box><Button size="small" onClick={() => onGo('tasks')}>All tasks <ArrowRight size={15} /></Button></Box>
-        <Paper className="task-preview-card hero-animate" elevation={0}>
-          {todaysTasks.length === 0 ? <Box className="empty-inline"><span className="empty-bubble"><CheckCheck size={22} /></span><Typography fontWeight={750}>You're clear for now.</Typography><Typography color="text.secondary" variant="body2">Add a task or enjoy a guilt-free break.</Typography></Box> : todaysTasks.slice(0, 3).map((task, i) => <Box className="task-preview-row" key={task.id}>
-            <button className={`task-check ${task.done ? 'checked' : ''}`} aria-label={task.done ? 'Mark incomplete' : 'Complete task'} onClick={() => onTaskToggle(task.id)}>{task.done && <Check size={14} />}</button>
-            <Box sx={{ flex: 1, minWidth: 0 }}><Typography fontWeight={750} className={task.done ? 'task-title done-text' : 'task-title'}>{task.title}</Typography><Typography variant="caption" color="text.secondary">{topicName(task.topicId)}{task.dueDate ? ` · ${task.dueDate === new Date().toISOString().slice(0, 10) ? 'Due today' : task.dueDate}` : ''}</Typography></Box>
-            <span className={`priority-mark priority-${task.priority.toLowerCase()}`} />
-          </Box>)}
-          <Button fullWidth className="add-task-inline" onClick={() => onGo('tasks')} startIcon={<Plus size={16} />}>Open task manager</Button>
-        </Paper>
-        <Box className="inline-section-header hero-animate"><Box><Typography variant="h2">Pick up where you left off</Typography><Typography color="text.secondary" variant="body2" sx={{ mt: 0.5 }}>Keep the learning momentum.</Typography></Box></Box>
-        <Paper className="continue-card hero-animate" elevation={0}>
-          <Box className="continue-card-art"><div className="continue-circle circle-a"/><div className="continue-circle circle-b"/><Code2 size={36} /></Box>
-          <Box className="continue-copy"><Chip size="small" label={`PHASE ${String(currentPhase.id).padStart(2, '0')}`} className="phase-chip"/><Typography variant="h3" sx={{ mt: 1 }}>{currentPhase.name}</Typography><Typography color="text.secondary" variant="body2" sx={{ mt: 0.5 }}>{currentPhase.weeks}</Typography><Box className="mini-progress"><span style={{ width: `${percent(phaseDone, currentPhase.topics.length)}%` }}/></Box><Typography variant="caption" color="text.secondary">{phaseDone} of {currentPhase.topics.length} topics mastered</Typography><Button variant="contained" size="small" sx={{ mt: 1.3, alignSelf: 'flex-start' }} endIcon={<ArrowRight size={15} />} onClick={() => onGo('syllabus')}>Continue learning</Button></Box>
-        </Paper>
-      </Box>
-      <Box className="dashboard-side-col">
-        <Paper className="focus-promo hero-animate" elevation={0}>
-          <Box className="focus-promo-top"><span className="promo-icon"><Focus size={19} /></span><span className="promo-tag">FOCUS MODE</span></Box><Typography variant="h2" sx={{ mt: 2, fontSize: 24 }}>One thing at a time.</Typography><Typography variant="body2" sx={{ mt: 1, color: 'rgba(255,255,255,.76)', lineHeight: 1.65 }}>Quiet the noise. Give your next task your full attention.</Typography><Box className="promo-timer"><Clock3 size={16} /> 25:00 <span>· Pomodoro</span></Box><Button onClick={() => onGo('focus')} variant="contained" className="promo-button" endIcon={<ArrowUpRight size={16} />}>Start a session</Button><div className="promo-blob blob-one"/><div className="promo-blob blob-two"/>
-        </Paper>
-        <Paper className="reminder-card hero-animate" elevation={0}><Box className="card-heading-row"><Box><Typography variant="h3">Your reminders</Typography><Typography color="text.secondary" variant="body2" sx={{ mt: 0.4 }}>Gentle nudges, on your terms.</Typography></Box><Box className={`reminder-status ${state.reminders.enabled ? 'is-enabled' : ''}`}><span />{state.reminders.enabled ? 'On' : 'Off'}</Box></Box><Box className="reminder-interval"><Box className="reminder-big-icon"><Bell size={18}/></Box><Box sx={{ flex: 1 }}><Typography fontWeight={800}>Study check-in</Typography><Typography color="text.secondary" variant="body2">Every {state.reminders.intervalMinutes < 60 ? `${state.reminders.intervalMinutes} min` : `${state.reminders.intervalMinutes / 60} ${state.reminders.intervalMinutes / 60 === 1 ? 'hour' : 'hours'}`}</Typography></Box><IconButton size="small" onClick={onSettings}><Settings2 size={18}/></IconButton></Box><Button fullWidth onClick={onSettings} variant={state.reminders.enabled ? 'outlined' : 'contained'}>{state.reminders.enabled ? 'Manage reminders' : 'Set up reminders'}</Button><Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.2, lineHeight: 1.5 }}>You'll add a reason when you skip or turn a reminder off.</Typography></Paper>
-        <Paper className="reminder-card hero-animate" elevation={0} sx={{ mt: 2 }}>
-          <Box className="card-heading-row">
-            <Box>
-              <Typography variant="h3">Projects Portfolio</Typography>
-              <Typography color="text.secondary" variant="body2" sx={{ mt: 0.4 }}>{(state.projects || []).length} project{(state.projects || []).length === 1 ? '' : 's'} in showcase</Typography>
-            </Box>
-            <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: '#f5f3ff', color: '#7c3aed', display: 'grid', placeItems: 'center' }}>
-              <FolderGit2 size={18} />
-            </Box>
-          </Box>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1, lineHeight: 1.55 }}>
-            {(state.projects || []).length > 0
-              ? `⭐ Top: ${(state.projects || []).find((p) => p.featured)?.title || state.projects[0].title}`
-              : 'Save live demos, GitHub links, and interview talking points.'}
+  return (
+    <Box className="home-clean-layout">
+      {/* ── 1. Clean Top Greeting ── */}
+      <Box className="home-hero-simple hero-animate">
+        <Box className="home-hero-text">
+          <Typography className="home-date-pill">
+            <CalendarDays size={13} /> {relativeDate()}
           </Typography>
-          <Button fullWidth onClick={() => onGo('projects')} variant="outlined" sx={{ mt: 1.5 }} endIcon={<ArrowRight size={15} />}>
-            Open project hub
+          <Typography variant="h1" className="home-hero-title">
+            {timeGreeting()}, <span className="gradient-text">let’s make progress.</span>
+          </Typography>
+          <Typography className="home-hero-subtitle">
+            Your preparation, active tasks, and focus sessions — organized in one clean workspace.
+          </Typography>
+        </Box>
+        <Stack direction="row" spacing={1.5} className="home-hero-actions">
+          <Button
+            variant="outlined"
+            onClick={() => onGo('tasks')}
+            startIcon={<Plus size={16} />}
+            className="home-action-btn"
+          >
+            New task
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => onGo('focus')}
+            startIcon={<Zap size={16} />}
+            className="home-action-btn primary"
+          >
+            Start focus
+          </Button>
+        </Stack>
+      </Box>
+
+      {/* ── Check-in banner (if reminders active) ── */}
+      {state.reminders.enabled && (
+        <Paper
+          className="clean-checkin-banner hero-animate"
+          elevation={0}
+          onClick={onReminder}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onReminder(); } }}
+        >
+          <span className="checkin-icon"><Bell size={16} /></span>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography fontWeight={750} sx={{ fontSize: 13 }}>Quick study check-in</Typography>
+            <Typography variant="caption" color="text.secondary">
+              Reminders active every {state.reminders.intervalMinutes < 60 ? `${state.reminders.intervalMinutes}m` : `${state.reminders.intervalMinutes / 60}h`} · Tap to log a quick response
+            </Typography>
+          </Box>
+          <Button size="small" variant="text" endIcon={<ArrowRight size={14} />} sx={{ fontWeight: 750, fontSize: 11, flexShrink: 0 }}>
+            Check in
           </Button>
         </Paper>
-        <Paper className="quote-card hero-animate" elevation={0}><Sparkles size={19} /><Typography fontWeight={800} sx={{ mt: 1 }}>Progress, not perfection.</Typography><Typography color="text.secondary" variant="body2" sx={{ mt: 0.5, lineHeight: 1.6 }}>You don't need a perfect day. You need a next step.</Typography></Paper>
+      )}
+
+      {/* ── 2. Unified 4 Metric Stat Cards ── */}
+      <Box className="home-stats-grid hero-animate">
+        <Paper className="home-stat-card" elevation={0} onClick={() => onGo('syllabus')}>
+          <Box className="home-stat-head">
+            <span>SYLLABUS</span>
+            <span className="home-stat-icon blue"><GraduationCap size={16} /></span>
+          </Box>
+          <Typography className="home-stat-value">{progress}%</Typography>
+          <Typography className="home-stat-sub">{mastered} of {totalTopics} topics mastered</Typography>
+          <Box className="home-stat-bar">
+            <span style={{ width: `${progress}%` }} className="bar-blue" />
+          </Box>
+        </Paper>
+
+        <Paper className="home-stat-card" elevation={0}>
+          <Box className="home-stat-head">
+            <span>STREAK</span>
+            <span className="home-stat-icon peach"><Flame size={16} /></span>
+          </Box>
+          <Typography className="home-stat-value">{streak} <small>days</small></Typography>
+          <Typography className="home-stat-sub">
+            {streak > 0 ? 'Consistent momentum 🔥' : 'Show up, even for a bit'}
+          </Typography>
+          <Box className="home-stat-bar">
+            <span style={{ width: `${Math.min(100, Math.max(14, streak * 14))}%` }} className="bar-peach" />
+          </Box>
+        </Paper>
+
+        <Paper className="home-stat-card" elevation={0} onClick={() => onGo('focus')}>
+          <Box className="home-stat-head">
+            <span>FOCUS TIME</span>
+            <span className="home-stat-icon mint"><Clock3 size={16} /></span>
+          </Box>
+          <Typography className="home-stat-value">
+            {Math.floor(totalMinutes / 60)}<small>h</small> {totalMinutes % 60}<small>m</small>
+          </Typography>
+          <Typography className="home-stat-sub">{state.sessions.length} logged sessions</Typography>
+          <Box className="home-stat-bar">
+            <span style={{ width: `${Math.min(100, Math.max(12, (totalMinutes % 180) / 1.8))}%` }} className="bar-mint" />
+          </Box>
+        </Paper>
+
+        <Paper className="home-stat-card" elevation={0} onClick={() => onGo('tasks')}>
+          <Box className="home-stat-head">
+            <span>TASKS DUE</span>
+            <span className="home-stat-icon purple"><ListTodo size={16} /></span>
+          </Box>
+          <Typography className="home-stat-value">{todaysTasks.length}</Typography>
+          <Typography className="home-stat-sub">{completedToday} completed today</Typography>
+          <Box className="home-stat-bar">
+            <span style={{ width: todaysTasks.length > 0 ? `${Math.min(100, (completedToday / (completedToday + todaysTasks.length || 1)) * 100)}%` : '100%' }} className="bar-purple" />
+          </Box>
+        </Paper>
+      </Box>
+
+      {/* ── 3. Focused Two-Column Workspace ── */}
+      <Box className="home-columns-grid">
+        {/* Left Column: Tasks & Syllabus Progress */}
+        <Box className="home-col-main">
+          {/* Today's Tasks Minimal Checklist */}
+          <Paper className="clean-section-card hero-animate" elevation={0}>
+            <Box className="clean-card-header">
+              <Box>
+                <Typography variant="h2" className="clean-card-title">Today’s Tasks</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Focus on high-leverage steps. Check off as you go.
+                </Typography>
+              </Box>
+              <Button
+                size="small"
+                onClick={() => onGo('tasks')}
+                endIcon={<ArrowRight size={14} />}
+                className="clean-card-link"
+              >
+                All tasks ({state.tasks.length})
+              </Button>
+            </Box>
+
+            {todaysTasks.length === 0 ? (
+              <Box className="clean-empty-box">
+                <span className="clean-empty-icon"><CheckCheck size={20} /></span>
+                <Typography fontWeight={750} sx={{ fontSize: 13, mt: 0.5 }}>You're all caught up for today!</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Add a task or take a well-deserved rest.
+                </Typography>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => onGo('tasks')}
+                  startIcon={<Plus size={14} />}
+                  sx={{ mt: 1.5, borderRadius: 2 }}
+                >
+                  Create a task
+                </Button>
+              </Box>
+            ) : (
+              <Box className="clean-task-list">
+                {todaysTasks.slice(0, 4).map((task) => (
+                  <Box className="clean-task-row" key={task.id}>
+                    <button
+                      className={`clean-checkbox ${task.done ? 'checked' : ''}`}
+                      onClick={() => onTaskToggle(task.id)}
+                      aria-label={task.done ? 'Mark incomplete' : 'Mark complete'}
+                    >
+                      {task.done && <Check size={13} />}
+                    </button>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography className={`clean-task-name ${task.done ? 'done' : ''}`} noWrap>
+                        {task.title}
+                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.3 }}>
+                        <span className="clean-task-chip">{topicName(task.topicId)}</span>
+                        {task.dueDate && (
+                          <span className="clean-task-due">
+                            <CalendarDays size={11} /> {task.dueDate === new Date().toISOString().slice(0, 10) ? 'Today' : task.dueDate}
+                          </span>
+                        )}
+                      </Box>
+                    </Box>
+                    <span className={`clean-priority-dot ${task.priority.toLowerCase()}`} title={`${task.priority} priority`} />
+                  </Box>
+                ))}
+                {todaysTasks.length > 4 && (
+                  <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center', py: 0.5, display: 'block' }}>
+                    + {todaysTasks.length - 4} more tasks on your list
+                  </Typography>
+                )}
+              </Box>
+            )}
+          </Paper>
+
+          {/* Continue Learning Phase Card */}
+          <Paper className="clean-section-card hero-animate" elevation={0}>
+            <Box className="clean-card-header">
+              <Box>
+                <Typography variant="h2" className="clean-card-title">Continue Learning</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Current syllabus roadmap milestone.
+                </Typography>
+              </Box>
+              <Chip
+                size="small"
+                label={`PHASE ${String(currentPhase.id).padStart(2, '0')}`}
+                className="clean-phase-tag"
+              />
+            </Box>
+
+            <Box className="clean-phase-content">
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                <Box>
+                  <Typography className="clean-phase-name">{currentPhase.name}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {currentPhase.weeks} · {currentPhase.topics.length} core topics
+                  </Typography>
+                </Box>
+                <Typography className="clean-phase-pct">{phaseProgress}%</Typography>
+              </Box>
+
+              <Box className="clean-phase-bar-track">
+                <span style={{ width: `${phaseProgress}%`, background: currentPhase.color || '#3563e9' }} />
+              </Box>
+
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pt: 0.5, flexWrap: 'wrap', gap: 1 }}>
+                <Typography variant="caption" color="text.secondary">
+                  {phaseDone} of {currentPhase.topics.length} topics mastered in this phase
+                </Typography>
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={() => onGo('syllabus')}
+                  endIcon={<ArrowRight size={14} />}
+                  sx={{ borderRadius: 2, fontWeight: 750, fontSize: 11 }}
+                >
+                  Resume syllabus
+                </Button>
+              </Box>
+            </Box>
+          </Paper>
+        </Box>
+
+        {/* Right Column: Focus Timer Launcher & Quick Navigation Hub */}
+        <Box className="home-col-side">
+          {/* Quick Focus Launcher Card */}
+          <Paper className="clean-focus-launcher hero-animate" elevation={0}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span className="focus-mini-tag">
+                <Zap size={13} /> FOCUS LAUNCHPAD
+              </span>
+              <IconButton size="small" onClick={() => onGo('focus')} aria-label="Open focus timer">
+                <ArrowUpRight size={16} />
+              </IconButton>
+            </Box>
+            <Typography variant="h3" sx={{ fontSize: 18, fontWeight: 850, mt: 1.2 }}>
+              One task at a time.
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.4, fontSize: 12, lineHeight: 1.5 }}>
+              Enter the flow state with a focused Pomodoro block.
+            </Typography>
+
+            <Box className="focus-time-display">
+              <Clock3 size={18} color="#3563e9" />
+              <strong>25:00</strong>
+              <span>Pomodoro block</span>
+            </Box>
+
+            <Button
+              fullWidth
+              variant="contained"
+              onClick={() => onGo('focus')}
+              endIcon={<ArrowRight size={15} />}
+              className="focus-launch-btn"
+            >
+              Start 25m Focus Session
+            </Button>
+          </Paper>
+
+          {/* Quick Navigation Hub (2x2 Grid) */}
+          <Paper className="clean-section-card hero-animate" elevation={0}>
+            <Typography variant="h2" className="clean-card-title" sx={{ mb: 1.5 }}>
+              Quick Hub
+            </Typography>
+            <Box className="clean-hub-grid">
+              <Box className="hub-tile" onClick={() => onGo('syllabus')} role="button" tabIndex={0}>
+                <span className="hub-icon blue"><Layers3 size={17} /></span>
+                <Box sx={{ minWidth: 0 }}>
+                  <strong>Syllabus</strong>
+                  <span>{phases.length} phases</span>
+                </Box>
+              </Box>
+
+              <Box className="hub-tile" onClick={() => onGo('projects')} role="button" tabIndex={0}>
+                <span className="hub-icon purple"><FolderGit2 size={17} /></span>
+                <Box sx={{ minWidth: 0 }}>
+                  <strong>Projects</strong>
+                  <span>{(state.projects || []).length} projects</span>
+                </Box>
+              </Box>
+
+              <Box className="hub-tile" onClick={() => onGo('notes')} role="button" tabIndex={0}>
+                <span className="hub-icon peach"><NotebookPen size={17} /></span>
+                <Box sx={{ minWidth: 0 }}>
+                  <strong>Notes</strong>
+                  <span>{state.notes.length} notes</span>
+                </Box>
+              </Box>
+
+              <Box className="hub-tile" onClick={() => onGo('tasks')} role="button" tabIndex={0}>
+                <span className="hub-icon mint"><ListTodo size={17} /></span>
+                <Box sx={{ minWidth: 0 }}>
+                  <strong>Tasks</strong>
+                  <span>{state.tasks.length} total</span>
+                </Box>
+              </Box>
+            </Box>
+          </Paper>
+
+          {/* Clean Quote Card */}
+          <Paper className="clean-quote-card hero-animate" elevation={0}>
+            <Sparkles size={16} color="#3563e9" />
+            <Typography fontWeight={750} sx={{ fontSize: 13, mt: 0.5, color: '#1e293b' }}>
+              Progress, not perfection.
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.2, lineHeight: 1.5, display: 'block' }}>
+              Consistency beats intensity. Small daily steps build exceptional engineering careers.
+            </Typography>
+          </Paper>
+        </Box>
       </Box>
     </Box>
-  </Box>;
+  );
 }
 
 function PageSearch({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
@@ -895,20 +1226,36 @@ function Projects({
 
       <Box className="projects-summary-grid hero-animate">
         <Paper className="projects-summary-card" elevation={0}>
+          <Box className="proj-stat-head">
+            <span>TOTAL PROJECTS</span>
+            <span className="proj-stat-icon"><FolderGit2 size={16} /></span>
+          </Box>
           <strong>{projects.length}</strong>
-          <span>Total projects</span>
+          <span className="proj-stat-sub">In showcase portfolio</span>
         </Paper>
         <Paper className="projects-summary-card" elevation={0}>
+          <Box className="proj-stat-head">
+            <span>LIVE DEMOS</span>
+            <span className="proj-stat-icon mint"><Globe size={16} /></span>
+          </Box>
           <strong style={{ color: '#0f865f' }}>{liveCount}</strong>
-          <span>Live demos</span>
+          <span className="proj-stat-sub">Deployments active</span>
         </Paper>
         <Paper className="projects-summary-card" elevation={0}>
+          <Box className="proj-stat-head">
+            <span>GITHUB REPOS</span>
+            <span className="proj-stat-icon blue"><Github size={16} /></span>
+          </Box>
           <strong style={{ color: '#2547b8' }}>{githubCount}</strong>
-          <span>GitHub repos</span>
+          <span className="proj-stat-sub">Codebases linked</span>
         </Paper>
         <Paper className="projects-summary-card" elevation={0}>
+          <Box className="proj-stat-head">
+            <span>FEATURED</span>
+            <span className="proj-stat-icon peach"><Star size={16} /></span>
+          </Box>
           <strong style={{ color: '#b7791f' }}>{featuredCount}</strong>
-          <span>Featured ⭐</span>
+          <span className="proj-stat-sub">Pinned highlights</span>
         </Paper>
       </Box>
 
@@ -1010,14 +1357,14 @@ function Projects({
                       </a>
                     )}
                     {proj.githubUrl && (
-                      <IconButton
-                        size="small"
+                      <button
+                        className="project-link-btn copy"
                         onClick={() => handleCopy(proj.githubUrl, proj.id)}
                         title="Copy GitHub URL"
-                        sx={{ p: 0.8, border: '1px solid #e2e8f0', borderRadius: 2 }}
                       >
                         {copiedLink === proj.id ? <Check size={14} color="#0f865f" /> : <Copy size={14} />}
-                      </IconButton>
+                        <span>{copiedLink === proj.id ? 'Copied' : 'Copy link'}</span>
+                      </button>
                     )}
                   </Box>
 
@@ -1264,20 +1611,208 @@ function NoteDialog({ open, initial, onClose, onSave }: { open: boolean; initial
   </Dialog>;
 }
 
-function SettingsDialog({ open, onClose, state, syncStatus, isGuest = false, onToggle, onInterval, onTimes, onHistory, onResumes, onProjects, onLogout }: { open: boolean; onClose: () => void; state: AppState; syncStatus: 'syncing' | 'synced' | 'offline' | 'error'; isGuest?: boolean; onToggle: (enabled: boolean) => void; onInterval: (m: number) => void; onTimes: (start: string, end: string) => void; onHistory: () => void; onResumes: () => void; onProjects: () => void; onLogout: () => void }) {
-  const [start, setStart] = useState(state.reminders.startTime); const [end, setEnd] = useState(state.reminders.endTime);
+function SettingsDialog({
+  open,
+  onClose,
+  state,
+  syncStatus,
+  isGuest = false,
+  userEmail = 'Guest Explorer',
+  streak = 0,
+  totalMinutes = 0,
+  masteredCount = 0,
+  onToggle,
+  onInterval,
+  onTimes,
+  onHistory,
+  onResumes,
+  onProjects,
+  onLogout,
+}: {
+  open: boolean;
+  onClose: () => void;
+  state: AppState;
+  syncStatus: 'syncing' | 'synced' | 'offline' | 'error';
+  isGuest?: boolean;
+  userEmail?: string;
+  streak?: number;
+  totalMinutes?: number;
+  masteredCount?: number;
+  onToggle: (enabled: boolean) => void;
+  onInterval: (m: number) => void;
+  onTimes: (start: string, end: string) => void;
+  onHistory: () => void;
+  onResumes: () => void;
+  onProjects: () => void;
+  onLogout: () => void;
+}) {
+  const [start, setStart] = useState(state.reminders.startTime);
+  const [end, setEnd] = useState(state.reminders.endTime);
   useEffect(() => { setStart(state.reminders.startTime); setEnd(state.reminders.endTime); }, [state.reminders.startTime, state.reminders.endTime, open]);
   const syncCopy = isGuest ? { label: 'Guest (Local)', detail: 'Your workspace is stored locally on this device in guest mode.', color: 'default' as const } : syncStatus === 'synced' ? { label: 'Synced', detail: 'Your workspace is securely synced to your account.', color: 'success' as const } : syncStatus === 'syncing' ? { label: 'Syncing', detail: 'Saving your latest changes securely.', color: 'primary' as const } : { label: syncStatus === 'offline' ? 'Offline' : 'Sync issue', detail: 'Your latest changes remain on this device and will retry when the connection is available.', color: 'warning' as const };
-  return <Dialog className="settings-dialog" open={open} onClose={onClose} fullWidth maxWidth="sm" scroll="paper"><DialogTitle className="dialog-title"><span className="dialog-icon focus"><Settings2 size={19}/></span><Box><Typography variant="h3">Your Orbit settings</Typography><Typography variant="body2" color="text.secondary">Make your workspace work for you.</Typography></Box><IconButton onClick={onClose} aria-label="Close settings" sx={{ ml: 'auto' }}><X size={19}/></IconButton></DialogTitle><DialogContent dividers><Stack spacing={2.3} sx={{ pt: 1 }}>
-    <Paper className="settings-section" elevation={0}><Box className="settings-row"><Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}><span className="dialog-icon note" style={{ width: 40, height: 40, borderRadius: 12, background: '#eff4ff', color: '#3563e9' }}><FileText size={20}/></span><Box><Typography fontWeight={800}>Resumes & Applications</Typography><Typography variant="body2" color="text.secondary">{(state.resumes || []).length} application{(state.resumes || []).length === 1 ? '' : 's'} saved with attached resumes</Typography></Box></Box><Button variant="contained" size="small" onClick={onResumes}>Manage</Button></Box></Paper>
-    <Paper className="settings-section" elevation={0}><Box className="settings-row"><Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}><span className="dialog-icon note" style={{ width: 40, height: 40, borderRadius: 12, background: '#f5f3ff', color: '#7c3aed' }}><FolderGit2 size={20}/></span><Box><Typography fontWeight={800}>Projects & Portfolio</Typography><Typography variant="body2" color="text.secondary">{(state.projects || []).length} project{(state.projects || []).length === 1 ? '' : 's'} with GitHub & live links</Typography></Box></Box><Button variant="contained" size="small" onClick={onProjects}>Showcase</Button></Box></Paper>
-    <Paper className="settings-section" elevation={0}><Box className="settings-row"><Box><Typography fontWeight={800}>Study check-in reminders</Typography><Typography variant="body2" color="text.secondary">Choose a rhythm that works for you.</Typography></Box><Switch checked={state.reminders.enabled} onChange={(e) => onToggle(e.target.checked)} /></Box><Divider sx={{ my: 1.5 }}/><Typography variant="caption" color="text.secondary" fontWeight={800}>REMIND ME EVERY</Typography><Box className="interval-options">{[{ label: '30 min', value: 30 }, { label: '1 hour', value: 60 }, { label: '2 hours', value: 120 }, { label: '3 hours', value: 180 }].map((item) => <button key={item.value} className={state.reminders.intervalMinutes === item.value ? 'selected' : ''} onClick={() => onInterval(item.value)}>{item.label}</button>)}</Box><Box className="form-two-col"><TextField label="Active from" type="time" value={start} onChange={(e) => setStart(e.target.value)} InputLabelProps={{ shrink: true }}/><TextField label="Active until" type="time" value={end} onChange={(e) => setEnd(e.target.value)} InputLabelProps={{ shrink: true }}/></Box><Button variant="outlined" onClick={() => onTimes(start, end)} disabled={start >= end}>Save active hours</Button><Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.5 }}>Turning reminders off or dismissing a check-in asks for a reason. Device settings may still allow system notifications to be swiped away.</Typography></Paper>
-    <Paper className="settings-section" elevation={0}><Box className="settings-row"><Box><Typography fontWeight={800}>Reminder history</Typography><Typography variant="body2" color="text.secondary">Review your check-ins and the reasons recorded.</Typography></Box><Button onClick={onHistory} size="small">View</Button></Box></Paper>
-    <Paper className="settings-section" elevation={0}><Box className="settings-row"><Box><Typography fontWeight={800}>Cloud & data</Typography><Typography variant="body2" color="text.secondary">{syncCopy.detail}</Typography></Box><Chip size="small" color={syncCopy.color} label={syncCopy.label}/></Box><Button fullWidth variant="outlined" sx={{ mt: 1.5 }} onClick={() => { const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `sde-orbit-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click(); URL.revokeObjectURL(url); }}>Export my data</Button></Paper>
-    <Button color="error" startIcon={<LogOut size={16}/>} onClick={onLogout} sx={{ alignSelf: 'flex-start', mt: 1 }}>{isGuest ? 'Exit Guest Mode' : 'Sign out'}</Button>
-  </Stack></DialogContent><DialogActions className="dialog-actions"><Button onClick={onClose} variant="contained">Done</Button></DialogActions></Dialog>;
-}
+  return (
+    <Dialog className="settings-dialog" open={open} onClose={onClose} fullWidth maxWidth="sm" scroll="paper">
+      <DialogTitle className="dialog-title">
+        <span className="dialog-icon focus"><User size={20}/></span>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="h3">Profile & Settings</Typography>
+          <Typography variant="body2" color="text.secondary">Your SDE Orbit workspace & account preferences.</Typography>
+        </Box>
+        <IconButton onClick={onClose} aria-label="Close profile & settings" sx={{ ml: 'auto' }}><X size={19}/></IconButton>
+      </DialogTitle>
+      <DialogContent dividers>
+        <Stack spacing={2} sx={{ pt: 0.5 }}>
+          {/* User Profile Banner Card */}
+          <Paper className="profile-hero-card" elevation={0}>
+            <Box className="profile-hero-top">
+              <Avatar className="profile-hero-avatar">
+                {userEmail?.slice(0, 1).toUpperCase() || 'V'}
+              </Avatar>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography className="profile-hero-name" noWrap>
+                  {isGuest ? 'Guest Explorer' : userEmail}
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mt: 0.5, flexWrap: 'wrap' }}>
+                  <span className={`profile-status-pill ${isGuest ? 'guest' : 'cloud'}`}>
+                    {isGuest ? <ShieldCheck size={12} /> : <Cloud size={12} />}
+                    {isGuest ? 'Offline Guest Mode' : 'Cloud Synchronized'}
+                  </span>
+                  <span className="profile-role-pill">SDE Aspirant</span>
+                </Box>
+              </Box>
+            </Box>
+            <Box className="profile-hero-stats">
+              <Box className="profile-stat-item">
+                <strong>{streak}</strong>
+                <span>Day Streak 🔥</span>
+              </Box>
+              <Box className="profile-stat-item">
+                <strong>{Math.floor(totalMinutes / 60)}h {totalMinutes % 60}m</strong>
+                <span>Focus Logged ⏱️</span>
+              </Box>
+              <Box className="profile-stat-item">
+                <strong>{masteredCount}</strong>
+                <span>Mastered Topics 🎯</span>
+              </Box>
+            </Box>
+          </Paper>
 
+          <Paper className="settings-section" elevation={0}>
+            <Box className="settings-row">
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flex: 1, minWidth: 0 }}>
+                <span className="dialog-icon note" style={{ width: 40, height: 40, borderRadius: 12, background: '#eff4ff', color: '#3563e9', flexShrink: 0 }}>
+                  <FileText size={20}/>
+                </span>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography fontWeight={800}>Resumes & Applications</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {(state.resumes || []).length} application{(state.resumes || []).length === 1 ? '' : 's'} saved with attached resumes
+                  </Typography>
+                </Box>
+              </Box>
+              <Button variant="contained" size="small" onClick={onResumes} sx={{ flexShrink: 0 }}>
+                Manage
+              </Button>
+            </Box>
+          </Paper>
+
+          <Paper className="settings-section" elevation={0}>
+            <Box className="settings-row">
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flex: 1, minWidth: 0 }}>
+                <span className="dialog-icon note" style={{ width: 40, height: 40, borderRadius: 12, background: '#f5f3ff', color: '#7c3aed', flexShrink: 0 }}>
+                  <FolderGit2 size={20}/>
+                </span>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography fontWeight={800}>Projects & Portfolio</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {(state.projects || []).length} project{(state.projects || []).length === 1 ? '' : 's'} with GitHub & live links
+                  </Typography>
+                </Box>
+              </Box>
+              <Button variant="contained" size="small" onClick={onProjects} sx={{ flexShrink: 0 }}>
+                Showcase
+              </Button>
+            </Box>
+          </Paper>
+
+          <Paper className="settings-section" elevation={0}>
+            <Box className="settings-row">
+              <Box>
+                <Typography fontWeight={800}>Study check-in reminders</Typography>
+                <Typography variant="body2" color="text.secondary">Choose a rhythm that works for you.</Typography>
+              </Box>
+              <Switch checked={state.reminders.enabled} onChange={(e) => onToggle(e.target.checked)} />
+            </Box>
+            <Divider sx={{ my: 1.5 }}/>
+            <Typography variant="caption" color="text.secondary" fontWeight={800}>REMIND ME EVERY</Typography>
+            <Box className="interval-options">
+              {[{ label: '30 min', value: 30 }, { label: '1 hour', value: 60 }, { label: '2 hours', value: 120 }, { label: '3 hours', value: 180 }].map((item) => (
+                <button key={item.value} className={state.reminders.intervalMinutes === item.value ? 'selected' : ''} onClick={() => onInterval(item.value)}>
+                  {item.label}
+                </button>
+              ))}
+            </Box>
+            <Box className="form-two-col">
+              <TextField label="Active from" type="time" value={start} onChange={(e) => setStart(e.target.value)} InputLabelProps={{ shrink: true }}/>
+              <TextField label="Active until" type="time" value={end} onChange={(e) => setEnd(e.target.value)} InputLabelProps={{ shrink: true }}/>
+            </Box>
+            <Button variant="outlined" onClick={() => onTimes(start, end)} disabled={start >= end} sx={{ mt: 1.2 }}>
+              Save active hours
+            </Button>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, lineHeight: 1.5 }}>
+              Turning reminders off or dismissing a check-in asks for a reason. Device settings may still allow system notifications to be swiped away.
+            </Typography>
+          </Paper>
+
+          <Paper className="settings-section" elevation={0}>
+            <Box className="settings-row">
+              <Box>
+                <Typography fontWeight={800}>Reminder history</Typography>
+                <Typography variant="body2" color="text.secondary">Review your check-ins and the reasons recorded.</Typography>
+              </Box>
+              <Button onClick={onHistory} size="small" variant="outlined">View</Button>
+            </Box>
+          </Paper>
+
+          <Paper className="settings-section" elevation={0}>
+            <Box className="settings-row">
+              <Box>
+                <Typography fontWeight={800}>Cloud & data</Typography>
+                <Typography variant="body2" color="text.secondary">{syncCopy.detail}</Typography>
+              </Box>
+              <Chip size="small" color={syncCopy.color} label={syncCopy.label}/>
+            </Box>
+            <Button
+              fullWidth
+              variant="outlined"
+              sx={{ mt: 1.5 }}
+              onClick={() => {
+                const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `sde-orbit-backup-${new Date().toISOString().slice(0, 10)}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+            >
+              Export my data (JSON)
+            </Button>
+          </Paper>
+
+          <Box sx={{ pt: 1, pb: 0.5 }}>
+            <Button color="error" variant="outlined" startIcon={<LogOut size={16}/>} onClick={onLogout} sx={{ borderRadius: 3, fontWeight: 750 }}>
+              {isGuest ? 'Exit Guest Mode' : 'Sign out of Orbit'}
+            </Button>
+          </Box>
+        </Stack>
+      </DialogContent>
+      <DialogActions className="dialog-actions">
+        <Button onClick={onClose} variant="contained">Done</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
 function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { open: boolean; state: AppState; onClose: () => void; onAddNew: () => void; onEdit: (app: ResumeApplication) => void; onDelete: (id: string) => void }) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | ApplicationStatus>('All');
@@ -1297,11 +1832,11 @@ function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { o
     <Dialog className="resumes-dialog" open={open} onClose={onClose} fullWidth maxWidth="md" scroll="paper">
       <DialogTitle className="dialog-title">
         <span className="dialog-icon task"><Briefcase size={20} /></span>
-        <Box sx={{ flex: 1 }}>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="h3">Resumes & Applications</Typography>
           <Typography variant="body2" color="text.secondary">Track your job applications and saved resume files (PDF/Word).</Typography>
         </Box>
-        <Button variant="contained" size="small" startIcon={<Plus size={16} />} onClick={onAddNew} sx={{ mr: 1 }}>
+        <Button variant="contained" size="small" startIcon={<Plus size={16} />} onClick={onAddNew} sx={{ flexShrink: 0, mr: 1 }}>
           New application
         </Button>
         <IconButton onClick={onClose} aria-label="Close dialog"><X size={19} /></IconButton>
@@ -1309,26 +1844,38 @@ function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { o
       <DialogContent dividers>
         <Box className="resumes-summary-grid">
           <Paper className="resumes-summary-card" elevation={0}>
+            <Box className="proj-stat-head">
+              <span>TOTAL APPLICATIONS</span>
+              <span className="proj-stat-icon"><Briefcase size={15} /></span>
+            </Box>
             <strong>{totalCount}</strong>
-            <span>TOTAL APPLICATIONS</span>
+            <span className="proj-stat-sub">Tracked submissions</span>
           </Paper>
           <Paper className="resumes-summary-card" elevation={0}>
+            <Box className="proj-stat-head">
+              <span>ACTIVE PIPELINE</span>
+              <span className="proj-stat-icon blue"><Activity size={15} /></span>
+            </Box>
             <strong style={{ color: '#2563eb' }}>{activeCount}</strong>
-            <span>IN PROGRESS / ACTIVE</span>
+            <span className="proj-stat-sub">Applied / OA / Interview</span>
           </Paper>
           <Paper className="resumes-summary-card" elevation={0}>
+            <Box className="proj-stat-head">
+              <span>OFFERS RECEIVED</span>
+              <span className="proj-stat-icon mint"><Trophy size={15} /></span>
+            </Box>
             <strong style={{ color: '#16a34a' }}>{offerCount}</strong>
-            <span>OFFERS RECEIVED</span>
+            <span className="proj-stat-sub">Accepted / In hand</span>
           </Paper>
         </Box>
 
-        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', mb: 2, flexWrap: 'wrap' }}>
+        <Box className="resumes-toolbar">
           <TextField
             size="small"
             placeholder="Search by company, role, or portal…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            sx={{ flex: 1, minWidth: 220 }}
+            className="resumes-search-field"
             InputProps={{
               startAdornment: <InputAdornment position="start"><Search size={16} /></InputAdornment>,
               endAdornment: search ? <InputAdornment position="end"><IconButton size="small" onClick={() => setSearch('')}><X size={14} /></IconButton></InputAdornment> : undefined,
@@ -1378,7 +1925,7 @@ function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { o
                       </Box>
                       <Typography className="resume-role">{app.role}</Typography>
                     </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
                       <IconButton size="small" onClick={() => onEdit(app)} aria-label="Edit application"><MoreHorizontal size={18} /></IconButton>
                       <IconButton size="small" onClick={() => onDelete(app.id)} aria-label="Delete application"><Trash2 size={16} /></IconButton>
                     </Box>
@@ -1388,9 +1935,9 @@ function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { o
                     <span className="resume-portal-pill">
                       <ExternalLink size={12} /> {app.whereApplied || 'Direct / Other'}
                     </span>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+                    <span className="resume-date-pill">
                       <CalendarDays size={12} /> Applied {app.appliedDate || 'Recently'}
-                    </Typography>
+                    </span>
                   </Box>
 
                   {app.notes && (
@@ -1400,16 +1947,19 @@ function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { o
                   )}
 
                   {app.fileData ? (
-                    <Box sx={{ mt: 0.5 }}>
+                    <Box sx={{ mt: 0.5, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }}>
                       <a
                         href={app.fileData}
                         download={app.fileName || `${app.company}_Resume.pdf`}
                         className={`resume-file-action ${isWord ? 'word' : ''}`}
-                        title="Download saved resume"
+                        title={`Download ${app.fileName || 'Resume'}`}
                       >
-                        <Paperclip size={14} />
-                        <span>{app.fileName} ({Math.round(app.fileSize / 1024)} KB)</span>
-                        <Download size={14} />
+                        <Paperclip size={14} style={{ flexShrink: 0 }} />
+                        <span className="resume-filename-text">{app.fileName || 'Resume'}</span>
+                        {app.fileSize > 0 && (
+                          <span className="resume-filesize-text">({Math.round(app.fileSize / 1024)} KB)</span>
+                        )}
+                        <Download size={14} style={{ flexShrink: 0 }} />
                       </a>
                     </Box>
                   ) : (
@@ -1597,19 +2147,30 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
               style={{ display: 'none' }}
             />
             {fileData ? (
-              <Box sx={{ p: 1.8, border: '1px solid #dce5ff', borderRadius: 3, background: '#f4f7ff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, minWidth: 0 }}>
-                  <FileText size={24} color={isWord ? '#1d4ed8' : '#dc2626'} />
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography fontWeight={750} sx={{ fontSize: 13, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+              <Box sx={{ p: 1.8, border: '1px solid #dce5ff', borderRadius: 3, background: '#f4f7ff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, maxWidth: '100%', overflow: 'hidden' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, minWidth: 0, flex: 1, overflow: 'hidden' }}>
+                  <FileText size={24} color={isWord ? '#1d4ed8' : '#dc2626'} style={{ flexShrink: 0 }} />
+                  <Box sx={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
+                    <Typography
+                      fontWeight={750}
+                      sx={{
+                        fontSize: 13,
+                        textOverflow: 'ellipsis',
+                        overflow: 'hidden',
+                        whiteSpace: 'nowrap',
+                        display: 'block',
+                        maxWidth: '100%',
+                      }}
+                      title={fileName}
+                    >
                       {fileName}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                       {Math.round(fileSize / 1024)} KB · Attached
                     </Typography>
                   </Box>
                 </Box>
-                <Box sx={{ display: 'flex', gap: 0.5 }}>
+                <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
                   <Button size="small" onClick={() => fileInputRef.current?.click()}>Change</Button>
                   <Button size="small" color="error" onClick={removeFile}>Remove</Button>
                 </Box>
