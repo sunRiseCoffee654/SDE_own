@@ -1,8 +1,8 @@
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
-const BASE_ID = 7400;
-const SNOOZE_ID = BASE_ID - 1;
+const RECURRING_BASE_ID = 7400;
+const SNOOZE_ID = 7300;
 
 export async function enableNotifications() {
   if (Capacitor.isNativePlatform()) {
@@ -20,15 +20,17 @@ export async function scheduleNativeReminders(intervalMinutes: number, startTime
   if (!Capacitor.isNativePlatform()) return;
   try {
     const old = await LocalNotifications.getPending();
-    await LocalNotifications.cancel({ notifications: old.notifications.filter((n) => n.id >= SNOOZE_ID && n.id < BASE_ID + 100) });
+    // Only cancel previously scheduled recurring reminders, preserving any active separate snooze
+    const recurring = old.notifications.filter((n) => n.id >= RECURRING_BASE_ID && n.id < RECURRING_BASE_ID + 100);
+    if (recurring.length) await LocalNotifications.cancel({ notifications: recurring });
+
     const now = new Date();
     const [sh, sm] = startTime.split(':').map(Number);
     const [eh, em] = endTime.split(':').map(Number);
-    const dayStart = sh * 60 + sm;
-    const dayEnd = eh * 60 + em;
     const notifications = [] as { id: number; title: string; body: string; schedule: { at: Date }; extra: { route: string } }[];
-    let id = BASE_ID;
-    // Pre-schedule up to 48 reminders. Reschedule on app launch and after each app-side acknowledgement.
+    let id = RECURRING_BASE_ID;
+
+    // Pre-schedule reminders for the next 3 days up to 48 notifications
     for (let day = 0; day < 3 && notifications.length < 48; day++) {
       const start = new Date(now);
       start.setDate(now.getDate() + day);
@@ -39,7 +41,13 @@ export async function scheduleNativeReminders(intervalMinutes: number, startTime
       let at = new Date(start);
       while (at <= now) at = new Date(at.getTime() + intervalMinutes * 60_000);
       while (at <= end && notifications.length < 48) {
-        notifications.push({ id: id++, title: 'Time for a quick check-in ✨', body: 'What are you working on right now? Open SDE Orbit to log your progress.', schedule: { at: new Date(at) }, extra: { route: 'reminder' } });
+        notifications.push({
+          id: id++,
+          title: 'Time for a quick check-in ✨',
+          body: 'What are you working on right now? Open SDE Orbit to log your progress.',
+          schedule: { at: new Date(at) },
+          extra: { route: 'reminder' },
+        });
         at = new Date(at.getTime() + intervalMinutes * 60_000);
       }
     }
@@ -53,7 +61,9 @@ export async function cancelNativeReminders() {
   if (!Capacitor.isNativePlatform()) return;
   try {
     const old = await LocalNotifications.getPending();
-    const orbitNotifications = old.notifications.filter((notification) => notification.id >= SNOOZE_ID && notification.id < BASE_ID + 100);
+    const orbitNotifications = old.notifications.filter(
+      (notification) => notification.id === SNOOZE_ID || (notification.id >= RECURRING_BASE_ID && notification.id < RECURRING_BASE_ID + 100)
+    );
     if (orbitNotifications.length) await LocalNotifications.cancel({ notifications: orbitNotifications });
   } catch (error) {
     console.warn('Could not cancel local reminders:', error);

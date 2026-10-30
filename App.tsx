@@ -3,9 +3,8 @@ import { SafeAreaView, StyleSheet, StatusBar, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 
 export default function App() {
-    // Replace with your local machine's IP (from your terminal: 192.168.1.8)
-    // or your hosted web URL
-    const devUrl = 'http://192.168.1.8:5173';
+    // Configurable via EXPO_PUBLIC_WEB_URL; falls back to localhost in dev and production HTTPS
+    const devUrl = process.env.EXPO_PUBLIC_WEB_URL || (__DEV__ ? 'http://localhost:5173' : 'https://sde-orbit.app');
 
     if (Platform.OS === 'web') {
         return (

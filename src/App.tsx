@@ -12,15 +12,20 @@ import {
   Clock3, Cloud, CloudOff, Code2, Coffee, Copy, Download, ExternalLink, FileText, Flame, FolderGit2, FolderKanban, Focus,
   Github, Globe, GraduationCap, HeartPulse, Home, Layers3, ListTodo, LoaderCircle, LockKeyhole, LogOut, MoreHorizontal,
   NotebookPen, Paperclip, Pin, Plus, Rocket, Search, Settings2, ShieldCheck, Sparkles, Star, Target, Timer,
-  Trash2, Trophy, UploadCloud, User, X, Zap,
+  RotateCcw, Trash2, Trophy, UploadCloud, User, X, Zap,
 } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import { cloudConfigured, supabase, CLOUD_TABLE } from './lib/supabase';
 import { phases } from './data/syllabus';
-import { defaultState, makeId, type AppState, type Task, type Note, type TaskPriority, type ReminderEvent, type ResumeApplication, type ApplicationStatus, type PortfolioProject, type ProjectStatus } from './lib/types';
+import {
+  defaultState, makeId, todayLocalISO, isSafeResumeDataUrl,
+  type AppState, type Task, type Note, type TaskPriority, type ReminderEvent,
+  type ResumeApplication, type ApplicationStatus, type PortfolioProject, type ProjectStatus
+} from './lib/types';
 import { cancelNativeReminders, enableNotifications, scheduleNativeReminders, scheduleNativeSnooze, showBrowserReminder } from './lib/notifications';
 import { consumeWidgetAction, syncWidgets } from './lib/widgets';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { Capacitor } from '@capacitor/core';
 
 const MotionBox = motion.create(Box);
 const tabs = [
@@ -83,19 +88,21 @@ const taskCategories = [
   ...phases.map((p) => ({ id: `phase-${p.id}`, name: `Phase ${String(p.id).padStart(2, '0')}: ${p.name}` })),
 ];
 
-function calculateStreak(sessions: { startedAt: string }[]): number {
-  if (!sessions.length) return 0;
-  const days = Array.from(new Set(sessions.map((s) => s.startedAt.slice(0, 10)))).sort().reverse();
+function calculateStreak(sessions: { startedAt: string; completed?: boolean }[]): number {
+  const completed = sessions.filter((s) => s.completed !== false && s.startedAt);
+  if (!completed.length) return 0;
+  const days = Array.from(new Set(completed.map((s) => todayLocalISO(new Date(s.startedAt))))).sort().reverse();
   if (!days.length) return 0;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocalISO();
   const yesterdayDate = new Date();
   yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-  const yesterday = yesterdayDate.toISOString().slice(0, 10);
+  const yesterday = todayLocalISO(yesterdayDate);
   if (days[0] !== today && days[0] !== yesterday) return 0;
   let streak = 0;
-  const checkDate = new Date(days[0] + 'T00:00:00');
+  // Use noon to avoid any DST or timezone transition drift during arithmetic
+  const checkDate = new Date(`${days[0]}T12:00:00`);
   for (const day of days) {
-    const expected = checkDate.toISOString().slice(0, 10);
+    const expected = todayLocalISO(checkDate);
     if (day === expected) {
       streak++;
       checkDate.setDate(checkDate.getDate() - 1);
@@ -108,14 +115,14 @@ function calculateStreak(sessions: { startedAt: string }[]): number {
 
 function nextRecurrenceDate(dueDate: string, recurrence?: string) {
   if (!dueDate || !recurrence || recurrence === 'Never') return null;
-  const next = new Date(`${dueDate}T00:00:00`);
+  const next = new Date(`${dueDate}T12:00:00`);
   if (Number.isNaN(next.getTime())) return null;
   const today = new Date(); today.setHours(0, 0, 0, 0);
   do {
     next.setDate(next.getDate() + (recurrence === 'Weekly' ? 7 : 1));
     if (recurrence === 'Weekdays') while (next.getDay() === 0 || next.getDay() === 6) next.setDate(next.getDate() + 1);
   } while (next <= today);
-  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
+  return todayLocalISO(next);
 }
 
 function AuthScreen({ onGuest }: { onGuest?: () => void }) {
@@ -148,12 +155,12 @@ function AuthScreen({ onGuest }: { onGuest?: () => void }) {
       <Box className="brand-mark"><OrbitMark /></Box>
       <Typography variant="h1" sx={{ fontSize: 32, mt: 2 }}>SDE Orbit</Typography>
       <Typography color="text.secondary" sx={{ mt: 1, lineHeight: 1.65 }}>Your preparation, notes, tasks, and focus sessions — together, and safely synced.</Typography>
-      <Box className="auth-fields" sx={{ mt: 3 }}>
+      <Box component="form" onSubmit={(e) => { e.preventDefault(); void submit(); }} className="auth-fields" sx={{ mt: 3 }}>
         <TextField label="Email address" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
         <TextField label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} />
         {error && <Alert severity="error">{error}</Alert>}
         {message && <Alert severity="info">{message}</Alert>}
-        <Button onClick={submit} variant="contained" size="large" disabled={busy || !email.includes('@') || password.length < 6} endIcon={busy ? <CircularProgress size={16} color="inherit" /> : <ArrowRight size={18} />}>
+        <Button type="submit" variant="contained" size="large" disabled={busy || !email.includes('@') || password.length < 6} endIcon={busy ? <CircularProgress size={16} color="inherit" /> : <ArrowRight size={18} />}>
           {mode === 'signup' ? 'Create your account' : 'Sign in to your Orbit'}
         </Button>
         <Button variant="text" onClick={() => { setMode(mode === 'signup' ? 'signin' : 'signup'); setError(''); setMessage(''); }}>
@@ -219,7 +226,13 @@ export default function App() {
   const timerEndTimeRef = useRef<number | null>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const syncTimerRef = useRef<number | null>(null);
+  const snoozeTimerRef = useRef<number | null>(null);
   const isBusyHydrating = useRef(false);
+  const [toastAction, setToastAction] = useState<{ label: string; onClick: () => void } | null>(null);
+  const lastDeletedTaskRef = useRef<Task | null>(null);
+  const lastDeletedNoteRef = useRef<Note | null>(null);
+  const lastDeletedProjectRef = useRef<PortfolioProject | null>(null);
+  const lastDeletedResumeRef = useRef<ResumeApplication | null>(null);
 
   useEffect(() => {
     if (!cloudConfigured || !supabase) { setAuthChecked(true); return; }
@@ -256,14 +269,36 @@ export default function App() {
     setSyncStatus('syncing');
     (async () => {
       try {
-        const { data, error } = await supabase!.from(CLOUD_TABLE).select('data').eq('user_id', session.user.id).maybeSingle();
+        const { data, error } = await supabase!.from(CLOUD_TABLE).select('data, updated_at').eq('user_id', session.user.id).maybeSingle();
         if (error) throw error;
         if (cancelled) return;
-        if (data?.data) setState({ ...cloneDefault(), ...(data.data as Partial<AppState>) });
-        else {
-          setState(readCachedState(session.user.id) || cloneDefault());
+        const local = readCachedState(session.user.id);
+        const localTime = local?.updatedAt ? new Date(local.updatedAt).getTime() : 0;
+        const cloudTime = data?.updated_at ? new Date(data.updated_at).getTime() : 0;
+
+        if (local && localTime > cloudTime) {
+          // Local changes are newer than cloud row (e.g. prior upsert failed during offline period)
+          setState(local);
+          setSyncStatus('syncing');
+          void Promise.resolve(
+            supabase!.from(CLOUD_TABLE).upsert(
+              { user_id: session.user.id, data: local, updated_at: new Date().toISOString() },
+              { onConflict: 'user_id' }
+            )
+          ).then(({ error: syncErr }) => {
+            if (syncErr) throw syncErr;
+            setSyncStatus('synced');
+          }).catch((e: unknown) => {
+            console.warn('Background recovery sync failed', e);
+            setSyncStatus(navigator.onLine ? 'error' : 'offline');
+          });
+        } else if (data?.data) {
+          setState({ ...cloneDefault(), ...(data.data as Partial<AppState>) });
+          setSyncStatus('synced');
+        } else {
+          setState(local || cloneDefault());
+          setSyncStatus('synced');
         }
-        setSyncStatus('synced');
       } catch (e) {
         console.warn('Cloud load failed', e);
         if (!cancelled) {
@@ -282,7 +317,11 @@ export default function App() {
     const userId = session?.user?.id;
     if (!userId) return;
     const key = localKey(userId);
-    try { localStorage.setItem(key, JSON.stringify(state)); } catch { /* storage may be unavailable */ }
+    try {
+      localStorage.setItem(key, JSON.stringify(state));
+    } catch (err) {
+      console.warn('Local storage write failed (quota might be exceeded):', err);
+    }
     if (userId === 'guest') {
       setSyncStatus('offline');
       return;
@@ -317,7 +356,9 @@ export default function App() {
       return;
     }
     if (!timerEndTimeRef.current) {
-      timerEndTimeRef.current = Date.now() + remainingSeconds * 1000;
+      const validRemaining = remainingSeconds > 0 ? remainingSeconds : timerLength * 60;
+      if (remainingSeconds <= 0) setRemainingSeconds(validRemaining);
+      timerEndTimeRef.current = Date.now() + validRemaining * 1000;
     }
 
     const checkTimer = () => {
@@ -327,8 +368,8 @@ export default function App() {
       if (left <= 0) {
         setTimerRunning(false);
         timerEndTimeRef.current = null;
-        const durationMinutes = timerLength;
-        setState((old) => ({
+        const durationMinutes = Math.max(1, timerLength);
+        updateState((old) => ({
           ...old,
           sessions: [
             { id: makeId(), topicId: selectedTopic, startedAt: new Date(Date.now() - durationMinutes * 60000).toISOString(), durationMinutes, completed: true },
@@ -376,29 +417,47 @@ export default function App() {
   }, [state.reminders, session?.user?.id]);
 
   useEffect(() => {
-    if (!cloudConfigured) return;
+    if (!Capacitor.isNativePlatform()) return;
+    let cancelled = false;
     let handle: { remove: () => Promise<void> } | undefined;
-    LocalNotifications.addListener('localNotificationActionPerformed', () => setPendingReminder(true))
-      .then((listener) => { handle = listener; })
+    LocalNotifications.addListener('localNotificationActionPerformed', () => {
+      if (!cancelled) setPendingReminder(true);
+    })
+      .then((listener) => {
+        if (cancelled) void listener.remove();
+        else handle = listener;
+      })
       .catch(() => undefined);
-    return () => { if (handle) void handle.remove(); };
+    return () => {
+      cancelled = true;
+      if (handle) void handle.remove();
+    };
   }, []);
 
-  const updateState = useCallback((update: (old: AppState) => AppState) => setState((old) => update(old)), []);
+  useEffect(() => {
+    if (!hydrated || !state.reminders.enabled) return;
+    void scheduleNativeReminders(state.reminders.intervalMinutes, state.reminders.startTime, state.reminders.endTime);
+  }, [hydrated, state.reminders.enabled]);
+
+  const updateState = useCallback((update: (old: AppState) => AppState) => setState((old) => {
+    const next = update(old);
+    return { ...next, updatedAt: new Date().toISOString() };
+  }), []);
+
+  const today = todayLocalISO();
   const allTopics = useMemo(() => phases.flatMap((p) => p.topics), []);
-  const allStatuses = Object.values(state.topicStatus);
-  const masteredCount = allTopics.filter((t) => state.topicStatus[t.id] === 'Mastered').length;
-  const inProgressCount = allTopics.filter((t) => state.topicStatus[t.id] === 'In Progress').length;
-  const revisionCount = allTopics.filter((t) => state.topicStatus[t.id] === 'Needs Revision').length;
+  const masteredCount = useMemo(() => allTopics.filter((t) => state.topicStatus[t.id] === 'Mastered').length, [allTopics, state.topicStatus]);
+  const inProgressCount = useMemo(() => allTopics.filter((t) => state.topicStatus[t.id] === 'In Progress').length, [allTopics, state.topicStatus]);
+  const revisionCount = useMemo(() => allTopics.filter((t) => state.topicStatus[t.id] === 'Needs Revision').length, [allTopics, state.topicStatus]);
   const overallProgress = percent(masteredCount, allTopics.length);
-  const todaysTasks = state.tasks.filter((t) => !t.done && (!t.dueDate || t.dueDate <= new Date().toISOString().slice(0, 10)));
-  const completedToday = state.tasks.filter((t) => t.done && t.dueDate === new Date().toISOString().slice(0, 10)).length;
-  const totalMinutes = state.sessions.reduce((sum, s) => sum + s.durationMinutes, 0);
-  const streak = calculateStreak(state.sessions);
+  const todaysTasks = useMemo(() => state.tasks.filter((t) => !t.done && (!t.dueDate || t.dueDate <= today)), [state.tasks, today]);
+  const completedToday = useMemo(() => state.tasks.filter((t) => t.done && (t.completedAt ? todayLocalISO(new Date(t.completedAt)) === today : t.dueDate === today)).length, [state.tasks, today]);
+  const totalMinutes = useMemo(() => state.sessions.reduce((sum, s) => sum + s.durationMinutes, 0), [state.sessions]);
+  const streak = useMemo(() => calculateStreak(state.sessions), [state.sessions]);
 
   useEffect(() => {
     if (!hydrated || !session?.user?.id) return;
-    const nextTask = state.tasks.find((task) => !task.done && (!task.dueDate || task.dueDate <= new Date().toISOString().slice(0, 10)));
+    const nextTask = state.tasks.find((task) => !task.done && (!task.dueDate || task.dueDate <= today));
     const mins = Math.floor(remainingSeconds / 60);
     const secs = remainingSeconds % 60;
     void syncWidgets({
@@ -409,7 +468,7 @@ export default function App() {
       focusTime: timerRunning ? `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}` : `${String(timerLength).padStart(2, '0')}:00`,
       streak,
     });
-  }, [hydrated, session?.user?.id, state.tasks, streak, todaysTasks.length, timerRunning, timerLength, selectedTopic]);
+  }, [hydrated, session?.user?.id, state.tasks, streak, todaysTasks.length, timerRunning, timerLength, selectedTopic, today]);
 
   useEffect(() => {
     if (!hydrated || !session?.user?.id) return;
@@ -440,8 +499,20 @@ export default function App() {
   }, [hydrated, session?.user?.id, remainingSeconds, timerRunning]);
 
   const logout = async () => {
-    if (supabase && session?.user?.id !== 'guest') await supabase.auth.signOut();
-    setSession(null); setActiveTab('home'); setToast('Signed out.');
+    if (snoozeTimerRef.current) window.clearTimeout(snoozeTimerRef.current);
+    if (syncTimerRef.current) window.clearTimeout(syncTimerRef.current);
+    const uid = session?.user?.id;
+    if (supabase && uid && uid !== 'guest') await supabase.auth.signOut();
+    if (uid) {
+      try {
+        localStorage.removeItem(localKey(uid));
+        localStorage.removeItem(`sde-orbit-last-reminder:${uid}`);
+      } catch {}
+    }
+    setSession(null);
+    setState(cloneDefault());
+    setActiveTab('home');
+    setToast('Signed out.');
   };
   const openReason = (action: ReminderAction) => { setPendingAction(action); setReason('Taking a short break'); setOtherReason(''); };
 
@@ -459,7 +530,13 @@ export default function App() {
       setPendingReminder(false);
       setToast('Reminder snoozed for 15 minutes.');
       const nativeSnoozeScheduled = await scheduleNativeSnooze();
-      if (!nativeSnoozeScheduled && 'Notification' in window && Notification.permission === 'granted') window.setTimeout(() => new Notification('SDE Orbit check-in ⏰', { body: 'Your reminder snooze is over.' }), 15 * 60_000);
+      if (!nativeSnoozeScheduled && 'Notification' in window && Notification.permission === 'granted') {
+        if (snoozeTimerRef.current) window.clearTimeout(snoozeTimerRef.current);
+        snoozeTimerRef.current = window.setTimeout(() => {
+          new Notification('SDE Orbit check-in ⏰', { body: 'Your reminder snooze is over.' });
+          setPendingReminder(true);
+        }, 15 * 60_000);
+      }
     } else if (pendingAction === 'completed') {
       setPendingReminder(false); setToast('Check-in recorded. Keep going!');
     } else if (pendingAction === 'skipped') {
@@ -489,14 +566,130 @@ export default function App() {
     if (!task) return old;
     const nowDone = !task.done;
     const nextDueDate = nowDone ? nextRecurrenceDate(task.dueDate, task.recurrence) : null;
-    const nextTask = nextDueDate ? { ...task, id: makeId(), dueDate: nextDueDate, done: false, createdAt: new Date().toISOString() } : null;
-    return { ...old, tasks: [...(nextTask ? [nextTask] : []), ...old.tasks.map((item) => item.id === id ? { ...item, done: nowDone } : item)] };
+    const alreadyExists = nextDueDate
+      ? old.tasks.some((t) => !t.done && t.title === task.title && t.topicId === task.topicId && t.dueDate === nextDueDate)
+      : false;
+    const nextTask = (nextDueDate && !alreadyExists) ? { ...task, id: makeId(), dueDate: nextDueDate, done: false, createdAt: new Date().toISOString(), completedAt: undefined } : null;
+    return {
+      ...old,
+      tasks: [
+        ...(nextTask ? [nextTask] : []),
+        ...old.tasks.map((item) => item.id === id ? { ...item, done: nowDone, completedAt: nowDone ? new Date().toISOString() : undefined } : item)
+      ]
+    };
   });
 
   const saveTask = (draft: Omit<Task, 'id' | 'createdAt' | 'done'> & Partial<Pick<Task, 'id' | 'createdAt' | 'done'>>) => {
-    const task: Task = { id: draft.id || makeId(), title: draft.title, description: draft.description, dueDate: draft.dueDate, priority: draft.priority, topicId: draft.topicId, recurrence: draft.recurrence, done: draft.done || false, createdAt: draft.createdAt || new Date().toISOString() };
+    const task: Task = { id: draft.id || makeId(), title: draft.title, description: draft.description, dueDate: draft.dueDate, priority: draft.priority, topicId: draft.topicId, recurrence: draft.recurrence || 'Never', done: draft.done || false, createdAt: draft.createdAt || new Date().toISOString() };
     updateState((old) => ({ ...old, tasks: draft.id ? old.tasks.map((t) => t.id === draft.id ? task : t) : [task, ...old.tasks] }));
     setTaskDialog(false); setEditingTask(null); setToast(draft.id ? 'Task updated.' : 'Task added.');
+  };
+
+  const deleteTask = (id: string) => {
+    const task = state.tasks.find((t) => t.id === id);
+    if (!task) return;
+    lastDeletedTaskRef.current = task;
+    updateState((old) => ({ ...old, tasks: old.tasks.filter((t) => t.id !== id) }));
+    setToastAction({
+      label: 'Undo',
+      onClick: () => {
+        if (lastDeletedTaskRef.current) {
+          const item = lastDeletedTaskRef.current;
+          updateState((old) => ({ ...old, tasks: [item, ...old.tasks] }));
+          lastDeletedTaskRef.current = null;
+          setToastAction(null);
+          setToast('Task restored.');
+        }
+      },
+    });
+    setToast(`Task "${task.title.slice(0, 20)}" deleted.`);
+  };
+
+  const deleteNote = (id: string) => {
+    const note = state.notes.find((n) => n.id === id);
+    if (!note) return;
+    lastDeletedNoteRef.current = note;
+    updateState((old) => ({ ...old, notes: old.notes.filter((n) => n.id !== id) }));
+    setToastAction({
+      label: 'Undo',
+      onClick: () => {
+        if (lastDeletedNoteRef.current) {
+          const item = lastDeletedNoteRef.current;
+          updateState((old) => ({ ...old, notes: [item, ...old.notes] }));
+          lastDeletedNoteRef.current = null;
+          setToastAction(null);
+          setToast('Note restored.');
+        }
+      },
+    });
+    setToast(`Note "${note.title.slice(0, 20)}" deleted.`);
+  };
+
+  const deleteProject = (id: string) => {
+    const proj = state.projects.find((p) => p.id === id);
+    if (!proj) return;
+    lastDeletedProjectRef.current = proj;
+    updateState((old) => ({ ...old, projects: old.projects.filter((p) => p.id !== id) }));
+    setToastAction({
+      label: 'Undo',
+      onClick: () => {
+        if (lastDeletedProjectRef.current) {
+          const item = lastDeletedProjectRef.current;
+          updateState((old) => ({ ...old, projects: [item, ...old.projects] }));
+          lastDeletedProjectRef.current = null;
+          setToastAction(null);
+          setToast('Project restored.');
+        }
+      },
+    });
+    setToast(`Project "${proj.title.slice(0, 20)}" deleted.`);
+  };
+
+  const deleteResumeApplication = (id: string) => {
+    const res = state.resumes.find((r) => r.id === id);
+    if (!res) return;
+    lastDeletedResumeRef.current = res;
+    updateState((old) => ({ ...old, resumes: old.resumes.filter((r) => r.id !== id) }));
+    setToastAction({
+      label: 'Undo',
+      onClick: () => {
+        if (lastDeletedResumeRef.current) {
+          const item = lastDeletedResumeRef.current;
+          updateState((old) => ({ ...old, resumes: [item, ...old.resumes] }));
+          lastDeletedResumeRef.current = null;
+          setToastAction(null);
+          setToast('Application restored.');
+        }
+      },
+    });
+    setToast(`Application for "${res.company}" deleted.`);
+  };
+
+  const startFocusSession = (durationMins: number = 25) => {
+    setTimerLength(durationMins);
+    const totalSecs = durationMins * 60;
+    setRemainingSeconds(totalSecs);
+    timerEndTimeRef.current = Date.now() + totalSecs * 1000;
+    setTimerRunning(true);
+    setActiveTab('focus');
+  };
+
+  const handleImportState = (imported: Partial<AppState>) => {
+    if (!imported || typeof imported !== 'object') {
+      setToast('Invalid backup file.');
+      return;
+    }
+    updateState((old) => ({
+      ...old,
+      tasks: Array.isArray(imported.tasks) ? imported.tasks : old.tasks,
+      notes: Array.isArray(imported.notes) ? imported.notes : old.notes,
+      projects: Array.isArray(imported.projects) ? imported.projects : old.projects,
+      sessions: Array.isArray(imported.sessions) ? imported.sessions : old.sessions,
+      resumes: Array.isArray(imported.resumes) ? imported.resumes : old.resumes,
+      topicStatus: imported.topicStatus && typeof imported.topicStatus === 'object' ? imported.topicStatus : old.topicStatus,
+      reminderHistory: Array.isArray(imported.reminderHistory) ? imported.reminderHistory : old.reminderHistory,
+    }));
+    setToast('Backup data successfully restored.');
   };
   const saveNote = (draft: Omit<Note, 'id' | 'updatedAt'> & Partial<Pick<Note, 'id' | 'updatedAt'>>) => {
     const note: Note = { ...draft, id: draft.id || makeId(), updatedAt: new Date().toISOString() };
@@ -528,14 +721,6 @@ export default function App() {
     setToast(draft.id ? 'Application updated.' : 'Resume & application saved.');
   };
 
-  const deleteResumeApplication = (id: string) => {
-    updateState((old) => ({
-      ...old,
-      resumes: (old.resumes || []).filter((r) => r.id !== id),
-    }));
-    setToast('Application removed.');
-  };
-
   const saveProject = (draft: Omit<PortfolioProject, 'id' | 'createdAt' | 'updatedAt'> & Partial<Pick<PortfolioProject, 'id' | 'createdAt' | 'updatedAt'>>) => {
     const now = new Date().toISOString();
     const proj: PortfolioProject = {
@@ -560,14 +745,6 @@ export default function App() {
     setProjectDialog(false);
     setEditingProject(null);
     setToast(draft.id ? 'Project updated.' : 'Project added to portfolio.');
-  };
-
-  const deleteProject = (id: string) => {
-    updateState((old) => ({
-      ...old,
-      projects: (old.projects || []).filter((p) => p.id !== id),
-    }));
-    setToast('Project removed.');
   };
 
   const toggleFeaturedProject = (id: string) => {
@@ -641,11 +818,11 @@ export default function App() {
       <Box className="app-content" ref={headerRef}>
         <AnimatePresence mode="wait" initial={false}>
           <MotionBox key={activeTab} initial={reducedMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={reducedMotion ? undefined : { opacity: 0, y: -4 }} transition={{ duration: reducedMotion ? 0 : 0.2 }}>
-            {activeTab === 'home' && <Dashboard state={state} progress={overallProgress} mastered={masteredCount} totalTopics={allTopics.length} inProgress={inProgressCount} revision={revisionCount} todaysTasks={todaysTasks} completedToday={completedToday} totalMinutes={totalMinutes} streak={streak} onGo={setActiveTab} onSettings={() => setSettingsOpen(true)} onTopicStatus={setTopicStatus} onTaskToggle={toggleTask} onReminder={() => setPendingReminder(true)} />}
+            {activeTab === 'home' && <Dashboard state={state} progress={overallProgress} mastered={masteredCount} totalTopics={allTopics.length} inProgress={inProgressCount} revision={revisionCount} todaysTasks={todaysTasks} completedToday={completedToday} totalMinutes={totalMinutes} streak={streak} onGo={setActiveTab} onSettings={() => setSettingsOpen(true)} onTopicStatus={setTopicStatus} onTaskToggle={toggleTask} onReminder={() => setPendingReminder(true)} onNewTask={() => { setEditingTask(null); setTaskDialog(true); }} onStartFocus={() => startFocusSession(25)} />}
             {activeTab === 'syllabus' && <Syllabus state={state} expandedPhase={expandedPhase} setExpandedPhase={setExpandedPhase} search={search} setSearch={setSearch} setTopicStatus={setTopicStatus} />}
-            {activeTab === 'tasks' && <Tasks state={state} search={search} setSearch={setSearch} onAdd={() => { setEditingTask(null); setTaskDialog(true); }} onEdit={(task) => { setEditingTask(task); setTaskDialog(true); }} onToggle={toggleTask} onDelete={(id) => updateState((old) => ({ ...old, tasks: old.tasks.filter((t) => t.id !== id) }))} />}
+            {activeTab === 'tasks' && <Tasks state={state} search={search} setSearch={setSearch} onAdd={() => { setEditingTask(null); setTaskDialog(true); }} onEdit={(task) => { setEditingTask(task); setTaskDialog(true); }} onToggle={toggleTask} onDelete={deleteTask} />}
             {activeTab === 'projects' && <Projects state={state} search={search} setSearch={setSearch} onAdd={() => { setEditingProject(null); setProjectDialog(true); }} onEdit={(p) => { setEditingProject(p); setProjectDialog(true); }} onToggleFeatured={toggleFeaturedProject} onDelete={deleteProject} />}
-            {activeTab === 'notes' && <Notes state={state} search={search} setSearch={setSearch} onAdd={() => { setEditingNote(null); setNoteDialog(true); }} onEdit={(note) => { setEditingNote(note); setNoteDialog(true); }} onTogglePin={(id) => updateState((old) => ({ ...old, notes: old.notes.map((n) => n.id === id ? { ...n, pinned: !n.pinned, updatedAt: new Date().toISOString() } : n) }))} onDelete={(id) => updateState((old) => ({ ...old, notes: old.notes.filter((n) => n.id !== id) }))} />}
+            {activeTab === 'notes' && <Notes state={state} search={search} setSearch={setSearch} onAdd={() => { setEditingNote(null); setNoteDialog(true); }} onEdit={(note) => { setEditingNote(note); setNoteDialog(true); }} onTogglePin={(id) => updateState((old) => ({ ...old, notes: old.notes.map((n) => n.id === id ? { ...n, pinned: !n.pinned, updatedAt: new Date().toISOString() } : n) }))} onDelete={deleteNote} />}
             {activeTab === 'focus' && <FocusPage state={state} selectedTopic={selectedTopic} setSelectedTopic={setSelectedTopic} timerLength={timerLength} setTimerLength={(m) => { setTimerLength(m); setRemainingSeconds(m * 60); setTimerRunning(false); }} remainingSeconds={remainingSeconds} timerRunning={timerRunning} onToggleTimer={() => setTimerRunning((v) => !v)} onResetTimer={() => { setTimerRunning(false); setRemainingSeconds(timerLength * 60); }} onSettings={() => setSettingsOpen(true)} onHistory={() => setHistoryOpen(true)} />}
           </MotionBox>
         </AnimatePresence>
@@ -693,15 +870,30 @@ export default function App() {
         onHistory={() => { setSettingsOpen(false); setHistoryOpen(true); }}
         onResumes={() => { setSettingsOpen(false); setResumesOpen(true); }}
         onProjects={() => { setSettingsOpen(false); setActiveTab('projects'); }}
+        onImport={handleImportState}
         onLogout={logout}
       />
       <ProjectFormDialog open={projectDialog} initial={editingProject} onClose={() => { setProjectDialog(false); setEditingProject(null); }} onSave={saveProject} />
       <ResumesDialog open={resumesOpen} state={state} onClose={() => setResumesOpen(false)} onAddNew={() => { setEditingResume(null); setResumeDialog(true); }} onEdit={(item) => { setEditingResume(item); setResumeDialog(true); }} onDelete={deleteResumeApplication} />
       <ResumeFormDialog open={resumeDialog} initial={editingResume} onClose={() => { setResumeDialog(false); setEditingResume(null); }} onSave={saveResumeApplication} />
       <ReasonDialog open={Boolean(pendingAction)} action={pendingAction} reason={reason} setReason={setReason} otherReason={otherReason} setOtherReason={setOtherReason} onClose={() => setPendingAction(null)} onSubmit={submitReason} />
-      <ReminderDialog open={pendingReminder} state={state} onAction={openReason} onClose={() => setPendingReminder(false)} />
+      <ReminderDialog open={pendingReminder && !pendingAction} state={state} onAction={openReason} onClose={() => setPendingReminder(false)} />
       <HistoryDialog open={historyOpen} state={state} onClose={() => setHistoryOpen(false)} />
-      <Snackbar open={Boolean(toast)} autoHideDuration={3200} onClose={() => setToast('')} anchorOrigin={{ vertical: 'top', horizontal: 'center' }}><Alert onClose={() => setToast('')} severity="success" variant="filled" sx={{ borderRadius: 3 }}>{toast}</Alert></Snackbar>
+      <Snackbar open={Boolean(toast)} autoHideDuration={4000} onClose={() => { setToast(''); setToastAction(null); }} anchorOrigin={{ vertical: 'top', horizontal: 'center' }}>
+        <Alert
+          onClose={() => { setToast(''); setToastAction(null); }}
+          severity="success"
+          variant="filled"
+          sx={{ borderRadius: 3, alignItems: 'center' }}
+          action={toastAction ? (
+            <Button color="inherit" size="small" onClick={toastAction.onClick} sx={{ fontWeight: 800, textTransform: 'none', border: '1px solid rgba(255,255,255,0.4)', ml: 1 }}>
+              {toastAction.label}
+            </Button>
+          ) : undefined}
+        >
+          {toast}
+        </Alert>
+      </Snackbar>
     </Box>
   </MotionConfig>;
 }
@@ -731,6 +923,8 @@ function Dashboard({
   onTopicStatus,
   onTaskToggle,
   onReminder,
+  onNewTask,
+  onStartFocus,
 }: {
   state: AppState;
   progress: number;
@@ -747,6 +941,8 @@ function Dashboard({
   onTopicStatus: (id: string, status: AppState['topicStatus'][string]) => void;
   onTaskToggle: (id: string) => void;
   onReminder: () => void;
+  onNewTask?: () => void;
+  onStartFocus?: () => void;
 }) {
   const currentPhase = phases.find((phase) => phase.topics.some((topic) => state.topicStatus[topic.id] === 'In Progress')) || phases[0];
   const phaseDone = currentPhase.topics.filter((topic) => state.topicStatus[topic.id] === 'Mastered').length;
@@ -770,7 +966,7 @@ function Dashboard({
         <Stack direction="row" spacing={1.5} className="home-hero-actions">
           <Button
             variant="outlined"
-            onClick={() => onGo('tasks')}
+            onClick={onNewTask || (() => onGo('tasks'))}
             startIcon={<Plus size={16} />}
             className="home-action-btn"
           >
@@ -778,7 +974,7 @@ function Dashboard({
           </Button>
           <Button
             variant="contained"
-            onClick={() => onGo('focus')}
+            onClick={onStartFocus || (() => onGo('focus'))}
             startIcon={<Zap size={16} />}
             className="home-action-btn primary"
           >
@@ -924,7 +1120,7 @@ function Dashboard({
                         <span className="clean-task-chip">{topicName(task.topicId)}</span>
                         {task.dueDate && (
                           <span className="clean-task-due">
-                            <CalendarDays size={11} /> {task.dueDate === new Date().toISOString().slice(0, 10) ? 'Today' : task.dueDate}
+                            <CalendarDays size={11} /> {task.dueDate === todayLocalISO() ? 'Today' : task.dueDate}
                           </span>
                         )}
                       </Box>
@@ -1119,7 +1315,7 @@ function Syllabus({ state, expandedPhase, setExpandedPhase, search, setSearch, s
 
 function Tasks({ state, search, setSearch, onAdd, onEdit, onToggle, onDelete }: { state: AppState; search: string; setSearch: (s: string) => void; onAdd: () => void; onEdit: (t: Task) => void; onToggle: (id: string) => void; onDelete: (id: string) => void }) {
   const [filter, setFilter] = useState<'Today' | 'Upcoming' | 'Overdue' | 'Completed' | 'All'>('Today');
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocalISO();
   const filtered = state.tasks.filter((task) => {
     const matchSearch = `${task.title} ${task.description} ${topicName(task.topicId)}`.toLowerCase().includes(search.toLowerCase());
     const group = filter === 'Today' ? !task.done && (!task.dueDate || task.dueDate <= today) : filter === 'Upcoming' ? !task.done && task.dueDate > today : filter === 'Overdue' ? !task.done && task.dueDate && task.dueDate < today : filter === 'Completed' ? task.done : true;
@@ -1439,10 +1635,10 @@ function FocusPage({ state, selectedTopic, setSelectedTopic, timerLength, setTim
     <SectionHeading eyebrow="BE HERE, RIGHT NOW" title="Focus" subtitle="One task. One session. Less noise." action={<Button variant="outlined" startIcon={<AlarmClock size={16}/>} onClick={onSettings}>Reminders</Button>} />
     <Box className="focus-layout">
       <Paper className="timer-panel hero-animate" elevation={0}>
-        <Box className="focus-panel-top"><span className="focus-label"><span className={timerRunning ? 'pulse-dot' : ''}/>{timerRunning ? 'SESSION IN PROGRESS' : 'YOUR FOCUS SPACE'}</span><IconButton onClick={onHistory}><Activity size={18}/></IconButton></Box>
+        <Box className="focus-panel-top"><span className="focus-label"><span className={timerRunning ? 'pulse-dot' : ''}/>{timerRunning ? 'SESSION IN PROGRESS' : 'YOUR FOCUS SPACE'}</span><IconButton onClick={onHistory} aria-label="View focus history"><Activity size={18}/></IconButton></Box>
         <Box className={`timer-wheel ${timerRunning ? 'timer-active' : ''}`} style={{ ['--timer-progress' as string]: `${Math.max(0, elapsed * 360)}deg` }}><Box className="timer-wheel-inner"><span>{timerRunning ? 'IN THE ZONE' : 'TIME TO FOCUS'}</span><strong>{minutes}:{seconds}</strong><small>{timerRunning ? 'You’re doing great' : 'Make this time count'}</small></Box></Box>
         <Box className="timer-presets">{[15, 25, 45, 60].map((m) => <button key={m} className={timerLength === m ? 'active' : ''} onClick={() => setTimerLength(m)} disabled={timerRunning}>{m}<small>min</small></button>)}</Box>
-        <Box className="timer-controls"><Button variant="contained" size="large" onClick={onToggleTimer} startIcon={timerRunning ? <Coffee size={18}/> : <Zap size={18}/>} className="timer-main-button">{timerRunning ? 'Pause session' : remainingSeconds === 0 ? 'Start again' : 'Start focusing'}</Button><IconButton onClick={onResetTimer} className="timer-reset" aria-label="Reset timer"><Activity size={18}/></IconButton></Box>
+        <Box className="timer-controls"><Button variant="contained" size="large" onClick={onToggleTimer} startIcon={timerRunning ? <Coffee size={18}/> : <Zap size={18}/>} className="timer-main-button">{timerRunning ? 'Pause session' : remainingSeconds === 0 ? 'Start again' : 'Start focusing'}</Button><IconButton onClick={onResetTimer} className="timer-reset" aria-label="Reset timer"><RotateCcw size={18}/></IconButton></Box>
         <Typography variant="caption" color="text.secondary" sx={{ mt: 2, textAlign: 'center' }}>Stay with it. Breaks are part of the process.</Typography>
       </Paper>
       <Box className="focus-side">
@@ -1460,6 +1656,7 @@ function TaskDialog({ open, initial, onClose, onSave }: { open: boolean; initial
   const [dueDate, setDueDate] = useState('');
   const [priority, setPriority] = useState<TaskPriority>('Medium');
   const [topicId, setTopicId] = useState('personal');
+  const [recurrence, setRecurrence] = useState<'Never' | 'Daily' | 'Weekdays' | 'Weekly'>('Never');
 
   useEffect(() => {
     setTitle(initial?.title || '');
@@ -1467,6 +1664,7 @@ function TaskDialog({ open, initial, onClose, onSave }: { open: boolean; initial
     setDueDate(initial?.dueDate || '');
     setPriority(initial?.priority || 'Medium');
     setTopicId(initial?.topicId || 'personal');
+    setRecurrence((initial?.recurrence as 'Never' | 'Daily' | 'Weekdays' | 'Weekly') || 'Never');
   }, [initial, open]);
 
   const submit = () => {
@@ -1480,7 +1678,7 @@ function TaskDialog({ open, initial, onClose, onSave }: { open: boolean; initial
       dueDate,
       priority,
       topicId,
-      recurrence: initial?.recurrence,
+      recurrence: recurrence === 'Never' ? undefined : recurrence,
     });
   };
 
@@ -1507,9 +1705,22 @@ function TaskDialog({ open, initial, onClose, onSave }: { open: boolean; initial
             Category / Topic
           </Typography>
           <Select value={topicId} onChange={(e) => setTopicId(e.target.value)}>
-            {taskCategories.map((cat) => (
-              <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
-            ))}
+            <ListSubheader disableSticky sx={{ fontWeight: 800 }}>General</ListSubheader>
+            <MenuItem value="personal">📌 Personal / Daily Goal</MenuItem>
+            <MenuItem value="general">📌 Other / General</MenuItem>
+            {phases.map((phase) => [
+              <ListSubheader key={`task-phase-${phase.id}`} disableSticky sx={{ fontWeight: 800, color: 'text.primary' }}>
+                Phase {phase.id}: {phase.name}
+              </ListSubheader>,
+              <MenuItem key={`phase-${phase.id}`} value={`phase-${phase.id}`} sx={{ fontWeight: 650 }}>
+                Entire Phase {phase.id}
+              </MenuItem>,
+              ...phase.topics.map((t) => (
+                <MenuItem key={t.id} value={t.id} sx={{ pl: 4 }}>
+                  {t.name}
+                </MenuItem>
+              )),
+            ])}
           </Select>
         </FormControl>
         <Box className="form-two-col">
@@ -1529,6 +1740,17 @@ function TaskDialog({ open, initial, onClose, onSave }: { open: boolean; initial
             </Select>
           </FormControl>
         </Box>
+        <FormControl fullWidth>
+          <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, fontWeight: 700 }}>
+            Repeat (Recurrence)
+          </Typography>
+          <Select value={recurrence} onChange={(e) => setRecurrence(e.target.value as any)}>
+            <MenuItem value="Never">Never (One-time task)</MenuItem>
+            <MenuItem value="Daily">Daily</MenuItem>
+            <MenuItem value="Weekdays">Weekdays (Mon - Fri)</MenuItem>
+            <MenuItem value="Weekly">Weekly</MenuItem>
+          </Select>
+        </FormControl>
         <TextField
           label="Notes (optional)"
           value={description}
@@ -1570,7 +1792,7 @@ function NoteDialog({ open, initial, onClose, onSave }: { open: boolean; initial
         <Typography variant="h3">{initial ? 'Edit note' : 'A fresh page'}</Typography>
         <Typography color="text.secondary" variant="body2">Capture an idea while it’s still fresh.</Typography>
       </Box>
-      <IconButton onClick={onClose} sx={{ ml: 'auto' }}><X size={19}/></IconButton>
+      <IconButton onClick={onClose} aria-label="Close note editor" sx={{ ml: 'auto' }}><X size={19}/></IconButton>
     </DialogTitle>
     <DialogContent>
       <Stack spacing={2} sx={{ pt: 1 }}>
@@ -1594,9 +1816,22 @@ function NoteDialog({ open, initial, onClose, onSave }: { open: boolean; initial
             Category / Topic
           </Typography>
           <Select value={topicId} onChange={(e) => setTopicId(e.target.value)}>
-            {taskCategories.map((cat) => (
-              <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
-            ))}
+            <ListSubheader disableSticky sx={{ fontWeight: 800 }}>General</ListSubheader>
+            <MenuItem value="personal">📌 Personal / Daily Goal</MenuItem>
+            <MenuItem value="general">📌 Other / General</MenuItem>
+            {phases.map((phase) => [
+              <ListSubheader key={`note-phase-${phase.id}`} disableSticky sx={{ fontWeight: 800, color: 'text.primary' }}>
+                Phase {phase.id}: {phase.name}
+              </ListSubheader>,
+              <MenuItem key={`phase-${phase.id}`} value={`phase-${phase.id}`} sx={{ fontWeight: 650 }}>
+                Entire Phase {phase.id}
+              </MenuItem>,
+              ...phase.topics.map((t) => (
+                <MenuItem key={t.id} value={t.id} sx={{ pl: 4 }}>
+                  {t.name}
+                </MenuItem>
+              )),
+            ])}
           </Select>
         </FormControl>
         <Button variant={pinned ? 'contained' : 'outlined'} startIcon={<Pin size={16}/>} onClick={() => setPinned((v) => !v)} sx={{ alignSelf: 'flex-start' }}>
@@ -1627,6 +1862,7 @@ function SettingsDialog({
   onHistory,
   onResumes,
   onProjects,
+  onImport,
   onLogout,
 }: {
   open: boolean;
@@ -1644,21 +1880,28 @@ function SettingsDialog({
   onHistory: () => void;
   onResumes: () => void;
   onProjects: () => void;
+  onImport: (imported: Partial<AppState>) => void;
   onLogout: () => void;
 }) {
   const [start, setStart] = useState(state.reminders.startTime);
   const [end, setEnd] = useState(state.reminders.endTime);
   useEffect(() => { setStart(state.reminders.startTime); setEnd(state.reminders.endTime); }, [state.reminders.startTime, state.reminders.endTime, open]);
   const syncCopy = isGuest ? { label: 'Guest (Local)', detail: 'Your workspace is stored locally on this device in guest mode.', color: 'default' as const } : syncStatus === 'synced' ? { label: 'Synced', detail: 'Your workspace is securely synced to your account.', color: 'success' as const } : syncStatus === 'syncing' ? { label: 'Syncing', detail: 'Saving your latest changes securely.', color: 'primary' as const } : { label: syncStatus === 'offline' ? 'Offline' : 'Sync issue', detail: 'Your latest changes remain on this device and will retry when the connection is available.', color: 'warning' as const };
+  const handleDone = () => {
+    if (start < end && (start !== state.reminders.startTime || end !== state.reminders.endTime)) {
+      onTimes(start, end);
+    }
+    onClose();
+  };
   return (
-    <Dialog className="settings-dialog" open={open} onClose={onClose} fullWidth maxWidth="sm" scroll="paper">
+    <Dialog className="settings-dialog" open={open} onClose={handleDone} fullWidth maxWidth="sm" scroll="paper">
       <DialogTitle className="dialog-title">
         <span className="dialog-icon focus"><User size={20}/></span>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="h3">Profile & Settings</Typography>
           <Typography variant="body2" color="text.secondary">Your SDE Orbit workspace & account preferences.</Typography>
         </Box>
-        <IconButton onClick={onClose} aria-label="Close profile & settings" sx={{ ml: 'auto' }}><X size={19}/></IconButton>
+        <IconButton onClick={handleDone} aria-label="Close profile & settings" sx={{ ml: 'auto' }}><X size={19}/></IconButton>
       </DialogTitle>
       <DialogContent dividers>
         <Stack spacing={2} sx={{ pt: 0.5 }}>
@@ -1782,22 +2025,50 @@ function SettingsDialog({
               </Box>
               <Chip size="small" color={syncCopy.color} label={syncCopy.label}/>
             </Box>
-            <Button
-              fullWidth
-              variant="outlined"
-              sx={{ mt: 1.5 }}
-              onClick={() => {
-                const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `sde-orbit-backup-${new Date().toISOString().slice(0, 10)}.json`;
-                a.click();
-                URL.revokeObjectURL(url);
-              }}
-            >
-              Export my data (JSON)
-            </Button>
+            <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+              <Button
+                fullWidth
+                variant="outlined"
+                onClick={() => {
+                  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `sde-orbit-backup-${todayLocalISO()}.json`;
+                  a.click();
+                  setTimeout(() => URL.revokeObjectURL(url), 1000);
+                }}
+              >
+                Export JSON
+              </Button>
+              <Button
+                fullWidth
+                variant="outlined"
+                component="label"
+              >
+                Import JSON
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = (evt) => {
+                      try {
+                        const parsed = JSON.parse(evt.target?.result as string);
+                        onImport(parsed);
+                      } catch {
+                        alert('Could not parse JSON backup file.');
+                      }
+                    };
+                    reader.readAsText(file);
+                    e.target.value = '';
+                  }}
+                />
+              </Button>
+            </Stack>
           </Paper>
 
           <Box sx={{ pt: 1, pb: 0.5 }}>
@@ -1808,7 +2079,7 @@ function SettingsDialog({
         </Stack>
       </DialogContent>
       <DialogActions className="dialog-actions">
-        <Button onClick={onClose} variant="contained">Done</Button>
+        <Button onClick={handleDone} variant="contained">Done</Button>
       </DialogActions>
     </Dialog>
   );
@@ -1946,7 +2217,7 @@ function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { o
                     </Typography>
                   )}
 
-                  {app.fileData ? (
+                  {app.fileData && isSafeResumeDataUrl(app.fileData) ? (
                     <Box sx={{ mt: 0.5, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }}>
                       <a
                         href={app.fileData}
@@ -1962,6 +2233,10 @@ function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { o
                         <Download size={14} style={{ flexShrink: 0 }} />
                       </a>
                     </Box>
+                  ) : app.fileData ? (
+                    <Typography variant="caption" color="error.main" sx={{ fontStyle: 'italic' }}>
+                      Attached file is not a supported document format.
+                    </Typography>
                   ) : (
                     <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
                       No resume file attached
@@ -2004,6 +2279,7 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
   const [fileType, setFileType] = useState('');
   const [fileData, setFileData] = useState<string | undefined>(undefined);
   const [notes, setNotes] = useState('');
+  const [fileError, setFileError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -2012,31 +2288,51 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
     const preset = WHERE_OPTIONS.includes(initial?.whereApplied || '') ? initial?.whereApplied : initial?.whereApplied ? 'Other' : 'LinkedIn';
     setWhereApplied(preset || 'LinkedIn');
     setCustomWhere(preset === 'Other' ? initial?.whereApplied || '' : '');
-    setAppliedDate(initial?.appliedDate || new Date().toISOString().slice(0, 10));
+    setAppliedDate(initial?.appliedDate || todayLocalISO());
     setStatus(initial?.status || 'Applied');
     setFileName(initial?.fileName || '');
     setFileSize(initial?.fileSize || 0);
     setFileType(initial?.fileType || '');
     setFileData(initial?.fileData);
     setNotes(initial?.notes || '');
+    setFileError(null);
   }, [initial, open]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 15 * 1024 * 1024) {
-      alert('Please select a file smaller than 15MB.');
+  const processFile = (file: File) => {
+    setFileError(null);
+    const validExtensions = ['.pdf', '.doc', '.docx'];
+    const nameLower = file.name.toLowerCase();
+    const hasValidExt = validExtensions.some((ext) => nameLower.endsWith(ext));
+    if (!hasValidExt) {
+      setFileError('Invalid file type. Please upload a PDF (.pdf) or Word document (.doc, .docx).');
+      return;
+    }
+    if (file.size > 2.5 * 1024 * 1024) {
+      setFileError('File size exceeds 2.5MB limit. Please upload a smaller document.');
       return;
     }
     const reader = new FileReader();
     reader.onload = (event) => {
       const dataUrl = event.target?.result as string;
+      if (!isSafeResumeDataUrl(dataUrl)) {
+        setFileError('The file content is not a supported document format.');
+        return;
+      }
       setFileData(dataUrl);
       setFileName(file.name);
       setFileSize(file.size);
       setFileType(file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 'application/msword'));
     };
+    reader.onerror = () => {
+      setFileError('Failed to read file. Please try again.');
+    };
     reader.readAsDataURL(file);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    processFile(file);
   };
 
   const removeFile = () => {
@@ -2044,6 +2340,7 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
     setFileName('');
     setFileSize(0);
     setFileType('');
+    setFileError(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -2056,7 +2353,7 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
       company: company.trim(),
       role: role.trim(),
       whereApplied: finalWhere,
-      appliedDate: appliedDate || new Date().toISOString().slice(0, 10),
+      appliedDate: appliedDate || todayLocalISO(),
       status,
       fileName,
       fileSize,
@@ -2082,6 +2379,7 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
       </DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ pt: 1 }}>
+          {fileError && <Alert severity="error" sx={{ borderRadius: 2 }}>{fileError}</Alert>}
           <TextField
             label="Company name"
             value={company}
@@ -2137,7 +2435,7 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
 
           <Box>
             <Typography variant="caption" color="text.secondary" sx={{ mb: 0.8, display: 'block', fontWeight: 750 }}>
-              Attach Resume File (PDF, DOC, DOCX)
+              Attach Resume File (PDF, DOC, DOCX — Max 2.5MB)
             </Typography>
             <input
               type="file"
@@ -2176,11 +2474,33 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
                 </Box>
               </Box>
             ) : (
-              <Box className="file-dropzone" onClick={() => fileInputRef.current?.click()}>
+              <Box
+                className="file-dropzone"
+                onClick={() => fileInputRef.current?.click()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    fileInputRef.current?.click();
+                  }
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) processFile(file);
+                }}
+                role="button"
+                tabIndex={0}
+                aria-label="Upload resume file"
+              >
                 <UploadCloud size={28} color="#3563e9" style={{ margin: '0 auto 6px' }} />
-                <Typography fontWeight={750} sx={{ fontSize: 13 }}>Click to upload Resume file</Typography>
+                <Typography fontWeight={750} sx={{ fontSize: 13 }}>Click or drag & drop Resume file here</Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.4 }}>
-                  Supports PDF (.pdf) and Word documents (.doc, .docx)
+                  Supports PDF (.pdf) and Word documents (.doc, .docx) up to 2.5MB
                 </Typography>
               </Box>
             )}
@@ -2417,7 +2737,46 @@ function ReasonDialog({ open, action, reason, setReason, otherReason, setOtherRe
 function MessageCircleIcon() { return <Bell size={18}/>; }
 
 function ReminderDialog({ open, state, onAction, onClose }: { open: boolean; state: AppState; onAction: (action: ReminderAction) => void; onClose: () => void }) {
-  return <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs"><DialogTitle className="reminder-dialog-head"><span className="reminder-dialog-icon"><Bell size={21}/></span><Typography variant="h2" sx={{ mt: 1.4 }}>A little check-in</Typography><Typography color="text.secondary" variant="body2" sx={{ mt: 0.6 }}>What’s happening right now?</Typography></DialogTitle><DialogContent><Box className="reminder-context"><span className="mini-wave">✦</span><Typography fontWeight={800}>No judgement. Just awareness.</Typography><Typography color="text.secondary" variant="body2">Record a reason to close this reminder. It becomes part of your history.</Typography></Box><Stack spacing={1.1} sx={{ mt: 2 }}><Button variant="contained" fullWidth onClick={() => onAction('completed')} startIcon={<CheckCircle2 size={17}/>}>I’m on track</Button><Button variant="outlined" fullWidth onClick={() => onAction('snoozed')} startIcon={<Clock3 size={17}/>}>Snooze for 15 minutes</Button><Button variant="text" fullWidth color="inherit" onClick={() => onAction('skipped')}>Skip this check-in</Button></Stack></DialogContent><DialogActions className="dialog-actions"><Button color="inherit" onClick={onClose}>Keep it open</Button><Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>Every response needs a reason.</Typography></DialogActions></Dialog>;
+  return (
+    <Dialog
+      open={open}
+      onClose={(event, reason) => {
+        if (reason !== 'backdropClick' && reason !== 'escapeKeyDown') onClose();
+      }}
+      disableEscapeKeyDown
+      fullWidth
+      maxWidth="xs"
+    >
+      <DialogTitle className="reminder-dialog-head">
+        <span className="reminder-dialog-icon"><Bell size={21}/></span>
+        <Typography variant="h2" sx={{ mt: 1.4 }}>A little check-in</Typography>
+        <Typography color="text.secondary" variant="body2" sx={{ mt: 0.6 }}>What’s happening right now?</Typography>
+      </DialogTitle>
+      <DialogContent>
+        <Box className="reminder-context">
+          <span className="mini-wave">✦</span>
+          <Typography fontWeight={800}>No judgement. Just awareness.</Typography>
+          <Typography color="text.secondary" variant="body2">Record a reason to close this reminder. It becomes part of your history.</Typography>
+        </Box>
+        <Stack spacing={1.1} sx={{ mt: 2 }}>
+          <Button variant="contained" fullWidth onClick={() => onAction('completed')} startIcon={<CheckCircle2 size={17}/>}>
+            I’m on track
+          </Button>
+          <Button variant="outlined" fullWidth onClick={() => onAction('snoozed')} startIcon={<Clock3 size={17}/>}>
+            Snooze for 15 minutes
+          </Button>
+          <Button variant="text" fullWidth color="inherit" onClick={() => onAction('skipped')}>
+            Skip this check-in
+          </Button>
+        </Stack>
+      </DialogContent>
+      <DialogActions className="dialog-actions" sx={{ justifyContent: 'center' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center', width: '100%' }}>
+          Every response needs a reason.
+        </Typography>
+      </DialogActions>
+    </Dialog>
+  );
 }
 
 function HistoryDialog({ open, state, onClose }: { open: boolean; state: AppState; onClose: () => void }) {
