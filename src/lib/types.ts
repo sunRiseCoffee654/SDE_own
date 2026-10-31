@@ -1,3 +1,5 @@
+import type { Phase } from '../data/syllabus';
+
 export type TaskPriority = 'Low' | 'Medium' | 'High';
 export type Task = { id: string; title: string; description: string; dueDate: string; priority: TaskPriority; topicId: string; done: boolean; createdAt: string; recurrence?: string; completedAt?: string };
 export type Note = { id: string; title: string; content: string; topicId: string; pinned: boolean; updatedAt: string };
@@ -39,6 +41,7 @@ export type ResumeApplication = {
 
 export type AppState = {
   topicStatus: Record<string, 'Not Started' | 'In Progress' | 'Needs Revision' | 'Mastered'>;
+  subtopicStatus?: Record<string, boolean>;
   tasks: Task[];
   notes: Note[];
   reminders: { enabled: boolean; intervalMinutes: number; startTime: string; endTime: string; quietHours: boolean; nextAt?: string };
@@ -47,11 +50,14 @@ export type AppState = {
   journal: { id: string; date: string; content: string }[];
   resumes: ResumeApplication[];
   projects: PortfolioProject[];
+  phaseOrder?: number[];
+  syllabus?: Phase[];
   updatedAt?: string;
 };
 
 export const defaultState: AppState = {
   topicStatus: {},
+  subtopicStatus: {},
   tasks: [],
   notes: [],
   reminders: { enabled: false, intervalMinutes: 60, startTime: '09:00', endTime: '21:00', quietHours: true },
@@ -60,6 +66,8 @@ export const defaultState: AppState = {
   journal: [],
   resumes: [],
   projects: [],
+  phaseOrder: [],
+  syllabus: [],
   updatedAt: new Date().toISOString(),
 };
 

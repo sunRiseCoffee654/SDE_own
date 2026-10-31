@@ -3,20 +3,21 @@ import {
   Alert, Avatar, Badge, Box, Button, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControl, IconButton, InputAdornment, MenuItem,
   Paper, Select, Snackbar, Stack, Switch, TextField, Tooltip, Typography, ListSubheader,
+  useMediaQuery,
 } from '@mui/material';
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'framer-motion';
 import { gsap } from 'gsap';
 import {
-  Activity, AlarmClock, ArrowDownRight, ArrowRight, ArrowUpRight, Bell, BellOff, BookOpen,
+  Activity, AlarmClock, AlertTriangle, ArrowDown, ArrowDownRight, ArrowRight, ArrowUp, ArrowUpDown, ArrowUpRight, Bell, BellOff, BookOpen,
   Briefcase, CalendarDays, Check, CheckCheck, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleHelp,
   Clock3, Cloud, CloudOff, Code2, Coffee, Copy, Download, ExternalLink, FileText, Flame, FolderGit2, FolderKanban, Focus,
-  Github, Globe, GraduationCap, HeartPulse, Home, Layers3, ListTodo, LoaderCircle, LockKeyhole, LogOut, MoreHorizontal,
-  NotebookPen, Paperclip, Pin, Plus, Rocket, Search, Settings2, ShieldCheck, Sparkles, Star, Target, Timer,
+  Github, Globe, GraduationCap, HeartPulse, Home, Layers3, Linkedin, ListTodo, LoaderCircle, LockKeyhole, LogOut, Mail, MoreHorizontal,
+  NotebookPen, Paperclip, Pencil, Pin, Plus, Rocket, Search, Settings2, ShieldCheck, Sparkles, Star, Target, Timer,
   RotateCcw, Trash2, Trophy, UploadCloud, User, X, Zap,
 } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import { cloudConfigured, supabase, CLOUD_TABLE } from './lib/supabase';
-import { phases } from './data/syllabus';
+import { phases, curatedSdePhases, getOrderedPhases, type Phase } from './data/syllabus';
 import {
   defaultState, makeId, todayLocalISO, isSafeResumeDataUrl,
   type AppState, type Task, type Note, type TaskPriority, type ReminderEvent,
@@ -25,7 +26,24 @@ import {
 import { cancelNativeReminders, enableNotifications, scheduleNativeReminders, scheduleNativeSnooze, showBrowserReminder } from './lib/notifications';
 import { consumeWidgetAction, syncWidgets } from './lib/widgets';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor } from '@capacitor/core';
+import { App as CapApp } from '@capacitor/app';
+
+const DEV_LINKS = {
+  github: 'https://github.com/sunRiseCoffee654',
+  portfolio: 'https://ram654.dev/',
+  linkedin: 'https://www.linkedin.com/in/vishnu654/',
+  email: 'chennamvishnu123@gmail.com',
+} as const;
+
+const openExternalUrl = (url: string) => {
+  try {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } catch {
+    window.location.href = url;
+  }
+};
 
 const MotionBox = motion.create(Box);
 const tabs = [
@@ -40,12 +58,14 @@ type TabId = typeof tabs[number]['id'];
 type ReminderAction = 'completed' | 'skipped' | 'snoozed' | 'disabled' | 'paused';
 const STATUSES = ['Not Started', 'In Progress', 'Needs Revision', 'Mastered'] as const;
 const REASONS = ['Taking a short break', 'Working on another task', 'Need more time', 'Not feeling well', 'Completed my planned work', 'Other'];
-const localKey = (userId: string) => `sde-orbit-state-v1:${userId}`;
+const localKey = (userId: string) => `sde-orbit-state-v2:${userId}`;
 const cloneDefault = (): AppState => JSON.parse(JSON.stringify(defaultState)) as AppState;
 const readCachedState = (userId: string): AppState | null => {
   try {
     const cached = localStorage.getItem(localKey(userId));
-    return cached ? { ...cloneDefault(), ...(JSON.parse(cached) as Partial<AppState>) } : null;
+    if (!cached) return null;
+    const parsed = JSON.parse(cached) as Partial<AppState>;
+    return { ...cloneDefault(), ...parsed, syllabus: parsed.syllabus || [] };
   } catch {
     return null;
   }
@@ -67,26 +87,26 @@ function statusColor(status: string) {
   if (status === 'Needs Revision') return 'warning';
   return 'default';
 }
-function topicName(topicId: string) {
+function topicName(topicId: string, customList?: Phase[]) {
+  if (!topicId) return 'Personal';
   if (topicId === 'personal') return 'Personal';
   if (topicId === 'general') return 'Other / General';
+  const list = customList || [];
   if (topicId?.startsWith('phase-')) {
     const num = parseInt(topicId.replace('phase-', ''), 10);
-    const p = phases.find((x) => x.id === num);
+    const p = list.find((x) => x.id === num);
     if (p) return p.name;
   }
-  for (const p of phases) {
+  for (const p of list) {
     const t = p.topics.find((x) => x.id === topicId);
     if (t) return t.name;
+    for (const top of p.topics) {
+      const sub = top.subtopics?.find((s) => s.id === topicId);
+      if (sub) return `${top.name}: ${sub.name}`;
+    }
   }
-  return 'Personal';
+  return topicId;
 }
-
-const taskCategories = [
-  { id: 'personal', name: '📌 Personal / Daily Goal' },
-  { id: 'general', name: '📌 Other / General' },
-  ...phases.map((p) => ({ id: `phase-${p.id}`, name: `Phase ${String(p.id).padStart(2, '0')}: ${p.name}` })),
-];
 
 function calculateStreak(sessions: { startedAt: string; completed?: boolean }[]): number {
   const completed = sessions.filter((s) => s.completed !== false && s.startedAt);
@@ -153,7 +173,7 @@ function AuthScreen({ onGuest }: { onGuest?: () => void }) {
   return <Box className="auth-shell">
     <MotionBox initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} className="auth-card">
       <Box className="brand-mark"><OrbitMark /></Box>
-      <Typography variant="h1" sx={{ fontSize: 32, mt: 2 }}>SDE Orbit</Typography>
+      <Typography variant="h1" sx={{ fontSize: 32, mt: 2 }}>Orbit</Typography>
       <Typography color="text.secondary" sx={{ mt: 1, lineHeight: 1.65 }}>Your preparation, notes, tasks, and focus sessions — together, and safely synced.</Typography>
       <Box component="form" onSubmit={(e) => { e.preventDefault(); void submit(); }} className="auth-fields" sx={{ mt: 3 }}>
         <TextField label="Email address" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
@@ -181,7 +201,7 @@ function AuthScreen({ onGuest }: { onGuest?: () => void }) {
 function ConfigurationRequired({ onGuest }: { onGuest?: () => void }) {
   return <Box className="auth-shell"><Paper className="auth-card" elevation={0}>
     <Box className="brand-mark"><OrbitMark /></Box>
-    <Typography variant="h1" sx={{ fontSize: 32, mt: 2 }}>Set up SDE Orbit</Typography>
+    <Typography variant="h1" sx={{ fontSize: 32, mt: 2 }}>Set up Orbit</Typography>
     <Typography color="text.secondary" sx={{ mt: 1, lineHeight: 1.65 }}>This build requires Supabase for cloud sync, or you can explore in offline guest mode.</Typography>
     <Alert severity="info" sx={{ mt: 3 }}>Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_PUBLISHABLE_KEY</code> to <code>.env.local</code> for cloud sync.</Alert>
     {onGuest && <Button variant="contained" sx={{ mt: 2.5 }} onClick={onGuest} startIcon={<Rocket size={17} />}>Continue in Offline Guest Mode</Button>}
@@ -189,12 +209,28 @@ function ConfigurationRequired({ onGuest }: { onGuest?: () => void }) {
 }
 
 function OrbitMark() {
-  return <svg viewBox="0 0 48 48" width="34" height="34" aria-hidden="true"><defs><linearGradient id="orbitGrad" x1="0" x2="1" y1="0" y2="1"><stop stopColor="#7190FF"/><stop offset="1" stopColor="#2D58DF"/></linearGradient></defs><circle cx="24" cy="24" r="19" fill="url(#orbitGrad)"/><ellipse cx="24" cy="24" rx="22" ry="8" fill="none" stroke="#C8D3FF" strokeWidth="2" transform="rotate(-35 24 24)"/><circle cx="38" cy="12" r="4" fill="#18B6A6" stroke="white" strokeWidth="2"/><path d="M18 24.5l4.1 4.1 8.4-10" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>;
+  return <img src="/logo.png" alt="Orbit" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 'inherit' }} />;
 }
 
 export default function App() {
   const reducedMotion = useReducedMotion();
   const [activeTab, setActiveTab] = useState<TabId>('home');
+  const [tabHistory, setTabHistory] = useState<TabId[]>(['home']);
+  const lastBackPressRef = useRef<number>(0);
+
+  const navigateToTab = useCallback((nextTab: TabId) => {
+    setActiveTab(nextTab);
+    setSearch('');
+    setTabHistory((prev) => {
+      if (prev[prev.length - 1] === nextTab) return prev;
+      return [...prev, nextTab];
+    });
+    try {
+      window.history.pushState({ tab: nextTab }, '', `#${nextTab}`);
+    } catch {
+      // ignore
+    }
+  }, []);
   const [state, setState] = useState<AppState>(cloneDefault);
   const [session, setSession] = useState<Session | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -215,14 +251,20 @@ export default function App() {
   const [editingProject, setEditingProject] = useState<PortfolioProject | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [reorderOpen, setReorderOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<ReminderAction | null>(null);
   const [pendingReminder, setPendingReminder] = useState(false);
   const [reason, setReason] = useState('Taking a short break');
   const [otherReason, setOtherReason] = useState('');
-  const [selectedTopic, setSelectedTopic] = useState('p1-t1');
+  const [selectedTopic, setSelectedTopic] = useState('');
   const [timerLength, setTimerLength] = useState(25);
   const [remainingSeconds, setRemainingSeconds] = useState(25 * 60);
   const [timerRunning, setTimerRunning] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<{ open: boolean; title: string; message: string; action: () => void }>({ open: false, title: '', message: '', action: () => {} });
+  const [newPhaseOpen, setNewPhaseOpen] = useState(false);
+  const requestDelete = useCallback((title: string, message: string, action: () => void) => {
+    setConfirmDelete({ open: true, title, message, action });
+  }, []);
   const timerEndTimeRef = useRef<number | null>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const syncTimerRef = useRef<number | null>(null);
@@ -233,6 +275,149 @@ export default function App() {
   const lastDeletedNoteRef = useRef<Note | null>(null);
   const lastDeletedProjectRef = useRef<PortfolioProject | null>(null);
   const lastDeletedResumeRef = useRef<ResumeApplication | null>(null);
+
+  const backHandlerStateRef = useRef({
+    quickAddOpen,
+    taskDialog,
+    noteDialog,
+    projectDialog,
+    resumeDialog,
+    resumesOpen,
+    settingsOpen,
+    historyOpen,
+    reorderOpen,
+    pendingAction,
+    pendingReminder,
+    activeTab,
+    tabHistory,
+  });
+
+  backHandlerStateRef.current = {
+    quickAddOpen,
+    taskDialog,
+    noteDialog,
+    projectDialog,
+    resumeDialog,
+    resumesOpen,
+    settingsOpen,
+    historyOpen,
+    reorderOpen,
+    pendingAction,
+    pendingReminder,
+    activeTab,
+    tabHistory,
+  };
+
+  useEffect(() => {
+    let backListener: { remove: () => void } | null = null;
+
+    const handleBack = () => {
+      const s = backHandlerStateRef.current;
+
+      // 1. Close open dialogs or quick action popup
+      if (s.quickAddOpen) {
+        setQuickAddOpen(false);
+        return true;
+      }
+      if (s.taskDialog) {
+        setTaskDialog(false);
+        setEditingTask(null);
+        return true;
+      }
+      if (s.noteDialog) {
+        setNoteDialog(false);
+        setEditingNote(null);
+        return true;
+      }
+      if (s.projectDialog) {
+        setProjectDialog(false);
+        setEditingProject(null);
+        return true;
+      }
+      if (s.resumeDialog) {
+        setResumeDialog(false);
+        setEditingResume(null);
+        return true;
+      }
+      if (s.resumesOpen) {
+        setResumesOpen(false);
+        return true;
+      }
+      if (s.settingsOpen) {
+        setSettingsOpen(false);
+        return true;
+      }
+      if (s.historyOpen) {
+        setHistoryOpen(false);
+        return true;
+      }
+      if (s.reorderOpen) {
+        setReorderOpen(false);
+        return true;
+      }
+      if (s.pendingAction) {
+        setPendingAction(null);
+        return true;
+      }
+      if (s.pendingReminder) {
+        setPendingReminder(false);
+        return true;
+      }
+
+      // 2. Navigate back to previous tab
+      if (s.activeTab !== 'home') {
+        if (s.tabHistory.length > 1) {
+          const nextHistory = [...s.tabHistory];
+          nextHistory.pop(); // remove current tab
+          const prevTab = nextHistory[nextHistory.length - 1] || 'home';
+          setTabHistory(nextHistory);
+          setActiveTab(prevTab);
+        } else {
+          setActiveTab('home');
+          setTabHistory(['home']);
+        }
+        return true;
+      }
+
+      // 3. On Home tab: double back press to exit
+      const now = Date.now();
+      if (now - lastBackPressRef.current < 2000) {
+        void CapApp.exitApp();
+      } else {
+        lastBackPressRef.current = now;
+        setToast('Press back again to exit.');
+      }
+      return true;
+    };
+
+    void CapApp.addListener('backButton', () => {
+      handleBack();
+    }).then((handle) => {
+      backListener = handle;
+    }).catch(() => {
+      // not on native platform
+    });
+
+    const onPopState = () => {
+      handleBack();
+    };
+    window.addEventListener('popstate', onPopState);
+
+    return () => {
+      if (backListener) {
+        void backListener.remove();
+      }
+      window.removeEventListener('popstate', onPopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) {
+      StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
+      StatusBar.setStyle({ style: Style.Light }).catch(() => {});
+      StatusBar.setBackgroundColor({ color: '#f6f8fc' }).catch(() => {});
+    }
+  }, []);
 
   useEffect(() => {
     if (!cloudConfigured || !supabase) { setAuthChecked(true); return; }
@@ -272,7 +457,7 @@ export default function App() {
         const { data, error } = await supabase!.from(CLOUD_TABLE).select('data, updated_at').eq('user_id', session.user.id).maybeSingle();
         if (error) throw error;
         if (cancelled) return;
-        const local = readCachedState(session.user.id);
+        const local = readCachedState(session.user.id) || (session.user.id !== 'guest' ? readCachedState('guest') : null);
         const localTime = local?.updatedAt ? new Date(local.updatedAt).getTime() : 0;
         const cloudTime = data?.updated_at ? new Date(data.updated_at).getTime() : 0;
 
@@ -302,7 +487,7 @@ export default function App() {
       } catch (e) {
         console.warn('Cloud load failed', e);
         if (!cancelled) {
-          setState(readCachedState(session.user.id) || cloneDefault());
+          setState(readCachedState(session.user.id) || (session.user.id !== 'guest' ? readCachedState('guest') : null) || cloneDefault());
           setSyncStatus(navigator.onLine ? 'error' : 'offline');
         }
       } finally {
@@ -311,6 +496,40 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [session?.user?.id]);
+
+  const syncNow = useCallback(async (customState?: AppState) => {
+    const currentState = customState || state;
+    const userId = session?.user?.id;
+    if (!supabase || !userId || userId === 'guest') return;
+    setSyncStatus('syncing');
+    try {
+      const { error } = await supabase.from(CLOUD_TABLE).upsert(
+        { user_id: userId, data: currentState, updated_at: new Date().toISOString() },
+        { onConflict: 'user_id' }
+      );
+      if (error) throw error;
+      setSyncStatus('synced');
+    } catch (e) {
+      console.warn('Manual/auto sync failed', e);
+      setSyncStatus(navigator.onLine ? 'error' : 'offline');
+    }
+  }, [state, session?.user?.id]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setToast('Connected to network. Syncing latest workspace...');
+      void syncNow();
+    };
+    const handleOffline = () => {
+      setSyncStatus('offline');
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [syncNow]);
 
   useEffect(() => {
     if (!hydrated || isBusyHydrating.current) return;
@@ -445,7 +664,9 @@ export default function App() {
   }), []);
 
   const today = todayLocalISO();
-  const allTopics = useMemo(() => phases.flatMap((p) => p.topics), []);
+  const currentSyllabus = useMemo(() => state.syllabus || [], [state.syllabus]);
+  const orderedPhases = useMemo(() => getOrderedPhases(currentSyllabus, state.phaseOrder), [currentSyllabus, state.phaseOrder]);
+  const allTopics = useMemo(() => currentSyllabus.flatMap((p) => p.topics), [currentSyllabus]);
   const masteredCount = useMemo(() => allTopics.filter((t) => state.topicStatus[t.id] === 'Mastered').length, [allTopics, state.topicStatus]);
   const inProgressCount = useMemo(() => allTopics.filter((t) => state.topicStatus[t.id] === 'In Progress').length, [allTopics, state.topicStatus]);
   const revisionCount = useMemo(() => allTopics.filter((t) => state.topicStatus[t.id] === 'Needs Revision').length, [allTopics, state.topicStatus]);
@@ -474,9 +695,9 @@ export default function App() {
     if (!hydrated || !session?.user?.id) return;
     const checkWidgetAction = () => {
       void consumeWidgetAction().then(({ tab }) => {
-        if (tab === 'tasks') setActiveTab('tasks');
+        if (tab === 'tasks') navigateToTab('tasks');
         if (tab === 'focus') {
-          setActiveTab('focus');
+          navigateToTab('focus');
           if (!timerRunning) {
             timerEndTimeRef.current = Date.now() + remainingSeconds * 1000;
             setTimerRunning(true);
@@ -512,6 +733,7 @@ export default function App() {
     setSession(null);
     setState(cloneDefault());
     setActiveTab('home');
+    setTabHistory(['home']);
     setToast('Signed out.');
   };
   const openReason = (action: ReminderAction) => { setPendingAction(action); setReason('Taking a short break'); setOtherReason(''); };
@@ -533,7 +755,7 @@ export default function App() {
       if (!nativeSnoozeScheduled && 'Notification' in window && Notification.permission === 'granted') {
         if (snoozeTimerRef.current) window.clearTimeout(snoozeTimerRef.current);
         snoozeTimerRef.current = window.setTimeout(() => {
-          new Notification('SDE Orbit check-in ⏰', { body: 'Your reminder snooze is over.' });
+          new Notification('Orbit check-in ⏰', { body: 'Your reminder snooze is over.' });
           setPendingReminder(true);
         }, 15 * 60_000);
       }
@@ -665,13 +887,163 @@ export default function App() {
     setToast(`Application for "${res.company}" deleted.`);
   };
 
+  const handleLoadCuratedSyllabus = useCallback(() => {
+    updateState((old) => ({
+      ...old,
+      syllabus: curatedSdePhases,
+      phaseOrder: curatedSdePhases.map((p) => p.id),
+      updatedAt: new Date().toISOString(),
+    }));
+    setToast('Curated SDE Roadmap (12 phases) imported.');
+  }, [updateState]);
+
+  const handleReorderPhase = useCallback((phaseId: number, direction: 'up' | 'down') => {
+    updateState((old) => {
+      const base = old.syllabus || [];
+      const currentOrder = old.phaseOrder && old.phaseOrder.length > 0
+        ? [...old.phaseOrder]
+        : base.map((p) => p.id);
+      const index = currentOrder.indexOf(phaseId);
+      if (index === -1) return old;
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= currentOrder.length) return old;
+      const temp = currentOrder[index];
+      currentOrder[index] = currentOrder[targetIndex];
+      currentOrder[targetIndex] = temp;
+      return {
+        ...old,
+        phaseOrder: currentOrder,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    setToast('Syllabus order updated.');
+  }, [updateState]);
+
+  const handleResetPhaseOrder = useCallback(() => {
+    updateState((old) => {
+      const base = old.syllabus || [];
+      return {
+        ...old,
+        phaseOrder: base.map((p) => p.id),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    setToast('Restored default syllabus order.');
+  }, [updateState]);
+
+  const handleAddPhase = useCallback((name: string, tags: string[], color: string) => {
+    const newId = Date.now();
+    const newPhase: Phase = {
+      id: newId,
+      name: name.trim(),
+      tags: tags.length > 0 ? tags : ['Custom'],
+      topics: [],
+      color: color || '#5774E8',
+      icon: 'code',
+      isCustom: true,
+    };
+    updateState((old) => {
+      const base = old.syllabus || [];
+      const nextSyllabus = [...base, newPhase];
+      const nextOrder = old.phaseOrder ? [...old.phaseOrder, newId] : nextSyllabus.map((p) => p.id);
+      return { ...old, syllabus: nextSyllabus, phaseOrder: nextOrder };
+    });
+    setToast(`Topic "${name}" created.`);
+  }, [updateState]);
+
+  const handleDeletePhase = useCallback((phaseId: number) => {
+    updateState((old) => {
+      const base = old.syllabus || [];
+      const nextSyllabus = base.filter((p) => p.id !== phaseId);
+      const nextOrder = (old.phaseOrder || []).filter((id) => id !== phaseId);
+      return { ...old, syllabus: nextSyllabus, phaseOrder: nextOrder };
+    });
+    setToast('Phase deleted.');
+  }, [updateState]);
+
+  const handleAddTopic = useCallback((phaseId: number, name: string) => {
+    if (!name.trim()) return;
+    const newTopicId = `custom-p${phaseId}-t${Date.now()}`;
+    updateState((old) => {
+      const base = old.syllabus || [];
+      const nextSyllabus = base.map((phase) => {
+        if (phase.id !== phaseId) return phase;
+        const newTopic = { id: newTopicId, name: name.trim(), subtopics: [] };
+        return { ...phase, topics: [...phase.topics, newTopic] };
+      });
+      return { ...old, syllabus: nextSyllabus };
+    });
+    setToast(`Sub-heading "${name}" added.`);
+  }, [updateState]);
+
+  const handleDeleteTopic = useCallback((phaseId: number, topicId: string) => {
+    updateState((old) => {
+      const base = old.syllabus || [];
+      const nextSyllabus = base.map((phase) => {
+        if (phase.id !== phaseId) return phase;
+        return { ...phase, topics: phase.topics.filter((t) => t.id !== topicId) };
+      });
+      const nextStatus = { ...old.topicStatus };
+      delete nextStatus[topicId];
+      return { ...old, syllabus: nextSyllabus, topicStatus: nextStatus };
+    });
+    setToast('Sub-heading deleted.');
+  }, [updateState]);
+
+  const handleAddSubtopic = useCallback((phaseId: number, topicId: string, subName: string) => {
+    if (!subName.trim()) return;
+    const newSubId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    updateState((old) => {
+      const base = old.syllabus || [];
+      const nextSyllabus = base.map((phase) => {
+        if (phase.id !== phaseId) return phase;
+        const nextTopics = phase.topics.map((t) => {
+          if (t.id !== topicId) return t;
+          const currentSubs = t.subtopics || [];
+          return { ...t, subtopics: [...currentSubs, { id: newSubId, name: subName.trim() }] };
+        });
+        return { ...phase, topics: nextTopics };
+      });
+      return { ...old, syllabus: nextSyllabus };
+    });
+    setToast(`Detailed topic "${subName}" added.`);
+  }, [updateState]);
+
+  const handleDeleteSubtopic = useCallback((phaseId: number, topicId: string, subId: string) => {
+    updateState((old) => {
+      const base = old.syllabus || [];
+      const nextSyllabus = base.map((phase) => {
+        if (phase.id !== phaseId) return phase;
+        const nextTopics = phase.topics.map((t) => {
+          if (t.id !== topicId) return t;
+          return { ...t, subtopics: (t.subtopics || []).filter((s) => s.id !== subId) };
+        });
+        return { ...phase, topics: nextTopics };
+      });
+      const nextSubStatus = { ...(old.subtopicStatus || {}) };
+      delete nextSubStatus[subId];
+      return { ...old, syllabus: nextSyllabus, subtopicStatus: nextSubStatus };
+    });
+    setToast('Detailed topic deleted.');
+  }, [updateState]);
+
+  const handleToggleSubtopic = useCallback((subId: string) => {
+    updateState((old) => ({
+      ...old,
+      subtopicStatus: {
+        ...(old.subtopicStatus || {}),
+        [subId]: !old.subtopicStatus?.[subId],
+      },
+    }));
+  }, [updateState]);
+
   const startFocusSession = (durationMins: number = 25) => {
     setTimerLength(durationMins);
     const totalSecs = durationMins * 60;
     setRemainingSeconds(totalSecs);
     timerEndTimeRef.current = Date.now() + totalSecs * 1000;
     setTimerRunning(true);
-    setActiveTab('focus');
+    navigateToTab('focus');
   };
 
   const handleImportState = (imported: Partial<AppState>) => {
@@ -686,6 +1058,8 @@ export default function App() {
       projects: Array.isArray(imported.projects) ? imported.projects : old.projects,
       sessions: Array.isArray(imported.sessions) ? imported.sessions : old.sessions,
       resumes: Array.isArray(imported.resumes) ? imported.resumes : old.resumes,
+      syllabus: Array.isArray(imported.syllabus) ? imported.syllabus : old.syllabus,
+      subtopicStatus: imported.subtopicStatus && typeof imported.subtopicStatus === 'object' ? imported.subtopicStatus : old.subtopicStatus,
       topicStatus: imported.topicStatus && typeof imported.topicStatus === 'object' ? imported.topicStatus : old.topicStatus,
       reminderHistory: Array.isArray(imported.reminderHistory) ? imported.reminderHistory : old.reminderHistory,
     }));
@@ -772,7 +1146,7 @@ export default function App() {
       },
     };
     setSession(guestSession);
-    setToast('Welcome to SDE Orbit (Guest Mode)!');
+    setToast('Welcome to Orbit (Guest Mode)!');
   };
 
   const isGuest = session?.user?.id === 'guest';
@@ -785,16 +1159,25 @@ export default function App() {
   return <MotionConfig reducedMotion="user" transition={{ duration: reducedMotion ? 0 : 0.22 }}>
     <Box className="app-shell">
       <Box className="app-topbar">
-        <Box className="brand-lockup" onClick={() => setActiveTab('home')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTab('home'); } }} role="button" tabIndex={0}>
+        <Box className="brand-lockup" onClick={() => navigateToTab('home')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigateToTab('home'); } }} role="button" tabIndex={0}>
           <Box className="brand-mark small"><OrbitMark /></Box>
           <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-            <Typography className="brand-name">sde orbit<span>.</span></Typography>
-            <Typography className="brand-caption">YOUR LEARNING SPACE</Typography>
+            <Typography className="brand-name">orbit<span>.</span></Typography>
+            <Typography className="brand-caption">Learning Path</Typography>
           </Box>
         </Box>
         <Stack direction="row" spacing={{ xs: 0.8, sm: 1.2 }} alignItems="center" sx={{ flexShrink: 0 }}>
-          <Tooltip title={syncStatusLabel(syncStatus, isGuest)}>
-            <Box className={`sync-pill sync-${isGuest ? 'synced' : syncStatus}`}>
+          <Tooltip title={isGuest ? 'Guest Mode (Stored locally). Click for info.' : `Sync Status: ${syncStatusLabel(syncStatus, isGuest)} (Click to sync now)`}>
+            <Box
+              className={`sync-pill sync-${isGuest ? 'synced' : syncStatus}`}
+              onClick={() => {
+                if (!isGuest) {
+                  void syncNow();
+                } else {
+                  setToast('Guest mode: changes saved locally. Sign in from Profile to sync to cloud.');
+                }
+              }}
+            >
               <span className="sync-dot" />
               <span>{syncStatusLabel(syncStatus, isGuest)}</span>
             </Box>
@@ -818,38 +1201,171 @@ export default function App() {
       <Box className="app-content" ref={headerRef}>
         <AnimatePresence mode="wait" initial={false}>
           <MotionBox key={activeTab} initial={reducedMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={reducedMotion ? undefined : { opacity: 0, y: -4 }} transition={{ duration: reducedMotion ? 0 : 0.2 }}>
-            {activeTab === 'home' && <Dashboard state={state} progress={overallProgress} mastered={masteredCount} totalTopics={allTopics.length} inProgress={inProgressCount} revision={revisionCount} todaysTasks={todaysTasks} completedToday={completedToday} totalMinutes={totalMinutes} streak={streak} onGo={setActiveTab} onSettings={() => setSettingsOpen(true)} onTopicStatus={setTopicStatus} onTaskToggle={toggleTask} onReminder={() => setPendingReminder(true)} onNewTask={() => { setEditingTask(null); setTaskDialog(true); }} onStartFocus={() => startFocusSession(25)} />}
-            {activeTab === 'syllabus' && <Syllabus state={state} expandedPhase={expandedPhase} setExpandedPhase={setExpandedPhase} search={search} setSearch={setSearch} setTopicStatus={setTopicStatus} />}
-            {activeTab === 'tasks' && <Tasks state={state} search={search} setSearch={setSearch} onAdd={() => { setEditingTask(null); setTaskDialog(true); }} onEdit={(task) => { setEditingTask(task); setTaskDialog(true); }} onToggle={toggleTask} onDelete={deleteTask} />}
-            {activeTab === 'projects' && <Projects state={state} search={search} setSearch={setSearch} onAdd={() => { setEditingProject(null); setProjectDialog(true); }} onEdit={(p) => { setEditingProject(p); setProjectDialog(true); }} onToggleFeatured={toggleFeaturedProject} onDelete={deleteProject} />}
-            {activeTab === 'notes' && <Notes state={state} search={search} setSearch={setSearch} onAdd={() => { setEditingNote(null); setNoteDialog(true); }} onEdit={(note) => { setEditingNote(note); setNoteDialog(true); }} onTogglePin={(id) => updateState((old) => ({ ...old, notes: old.notes.map((n) => n.id === id ? { ...n, pinned: !n.pinned, updatedAt: new Date().toISOString() } : n) }))} onDelete={deleteNote} />}
-            {activeTab === 'focus' && <FocusPage state={state} selectedTopic={selectedTopic} setSelectedTopic={setSelectedTopic} timerLength={timerLength} setTimerLength={(m) => { setTimerLength(m); setRemainingSeconds(m * 60); setTimerRunning(false); }} remainingSeconds={remainingSeconds} timerRunning={timerRunning} onToggleTimer={() => setTimerRunning((v) => !v)} onResetTimer={() => { setTimerRunning(false); setRemainingSeconds(timerLength * 60); }} onSettings={() => setSettingsOpen(true)} onHistory={() => setHistoryOpen(true)} />}
+            {activeTab === 'home' && <Dashboard state={state} progress={overallProgress} mastered={masteredCount} totalTopics={allTopics.length} inProgress={inProgressCount} revision={revisionCount} todaysTasks={todaysTasks} completedToday={completedToday} totalMinutes={totalMinutes} streak={streak} onGo={navigateToTab} onSettings={() => setSettingsOpen(true)} onTopicStatus={setTopicStatus} onTaskToggle={toggleTask} onReminder={() => setPendingReminder(true)} onNewTask={() => { setEditingTask(null); setTaskDialog(true); }} onStartFocus={() => startFocusSession(25)} onLoadCurated={handleLoadCuratedSyllabus} />}
+            {activeTab === 'syllabus' && (
+              <Syllabus
+                state={state}
+                expandedPhase={expandedPhase}
+                setExpandedPhase={setExpandedPhase}
+                search={search}
+                setSearch={setSearch}
+                setTopicStatus={setTopicStatus}
+                onReorderPhase={handleReorderPhase}
+                onOpenReorder={() => setReorderOpen(true)}
+                onOpenNewPhase={() => setNewPhaseOpen(true)}
+                onAddTopic={handleAddTopic}
+                onDeleteTopic={handleDeleteTopic}
+                onAddSubtopic={handleAddSubtopic}
+                onDeleteSubtopic={handleDeleteSubtopic}
+                onToggleSubtopic={handleToggleSubtopic}
+                onDeletePhase={handleDeletePhase}
+                onRequestDelete={requestDelete}
+                onLoadCurated={handleLoadCuratedSyllabus}
+              />
+            )}
+            {activeTab === 'tasks' && (
+              <Tasks
+                state={state}
+                search={search}
+                setSearch={setSearch}
+                onAdd={() => { setEditingTask(null); setTaskDialog(true); }}
+                onEdit={(task) => { setEditingTask(task); setTaskDialog(true); }}
+                onToggle={toggleTask}
+                onDelete={(id) => {
+                  const task = state.tasks.find((t) => t.id === id);
+                  requestDelete(
+                    'Delete Task',
+                    `Are you sure you want to delete task "${task?.title || 'this task'}"?`,
+                    () => deleteTask(id)
+                  );
+                }}
+              />
+            )}
+            {activeTab === 'projects' && (
+              <Projects
+                state={state}
+                search={search}
+                setSearch={setSearch}
+                onAdd={() => { setEditingProject(null); setProjectDialog(true); }}
+                onEdit={(p) => { setEditingProject(p); setProjectDialog(true); }}
+                onToggleFeatured={toggleFeaturedProject}
+                onDelete={(id) => {
+                  const proj = state.projects.find((p) => p.id === id);
+                  requestDelete(
+                    'Delete Project',
+                    `Are you sure you want to delete project "${proj?.title || 'this project'}"?`,
+                    () => deleteProject(id)
+                  );
+                }}
+              />
+            )}
+            {activeTab === 'notes' && (
+              <Notes
+                state={state}
+                search={search}
+                setSearch={setSearch}
+                onAdd={() => { setEditingNote(null); setNoteDialog(true); }}
+                onEdit={(note) => { setEditingNote(note); setNoteDialog(true); }}
+                onTogglePin={(id) => updateState((old) => ({ ...old, notes: old.notes.map((n) => n.id === id ? { ...n, pinned: !n.pinned, updatedAt: new Date().toISOString() } : n) }))}
+                onDelete={(id) => {
+                  const note = state.notes.find((n) => n.id === id);
+                  requestDelete(
+                    'Delete Note',
+                    `Are you sure you want to delete note "${note?.title || 'Untitled note'}"?`,
+                    () => deleteNote(id)
+                  );
+                }}
+              />
+            )}
+            {activeTab === 'focus' && (
+              <FocusPage
+                state={state}
+                selectedTopic={selectedTopic}
+                setSelectedTopic={setSelectedTopic}
+                timerLength={timerLength}
+                setTimerLength={(m) => { setTimerLength(m); setRemainingSeconds(m * 60); setTimerRunning(false); }}
+                remainingSeconds={remainingSeconds}
+                timerRunning={timerRunning}
+                onToggleTimer={() => setTimerRunning((v) => !v)}
+                onResetTimer={() => { setTimerRunning(false); setRemainingSeconds(timerLength * 60); }}
+                onSettings={() => setSettingsOpen(true)}
+                onHistory={() => setHistoryOpen(true)}
+              />
+            )}
           </MotionBox>
         </AnimatePresence>
       </Box>
 
-      <Box className="bottom-nav-wrap">
+      {quickAddOpen && (
+        <Box
+          sx={{ position: 'fixed', inset: 0, zIndex: 39 }}
+          onClick={() => setQuickAddOpen(false)}
+        />
+      )}
+
+      <Box className="bottom-dock-bar">
         <Box className="floating-nav" role="navigation" aria-label="Main navigation">
-          {tabs.map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${activeTab === id ? 'active' : ''}`} onClick={() => { setActiveTab(id); setSearch(''); }} aria-current={activeTab === id ? 'page' : undefined}>
-            <Icon size={20} strokeWidth={activeTab === id ? 2.4 : 1.9} />
-            <AnimatePresence initial={false}>{activeTab === id && <motion.span initial={{ opacity: 0, width: 0 }} animate={{ opacity: 1, width: 'auto' }} exit={{ opacity: 0, width: 0 }} transition={{ duration: 0.18 }}>{label}</motion.span>}</AnimatePresence>
-          </button>)}
+          {tabs.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              className={`nav-item ${activeTab === id ? 'active' : ''}`}
+              onClick={() => navigateToTab(id)}
+              aria-current={activeTab === id ? 'page' : undefined}
+            >
+              <span className="nav-icon-wrap">
+                <Icon size={21} strokeWidth={activeTab === id ? 2.4 : 1.9} />
+              </span>
+              <span className="nav-label">{label}</span>
+            </button>
+          ))}
+        </Box>
+
+        <Box className="fab-dock-item">
+          <AnimatePresence>
+            {quickAddOpen && (
+              <motion.div
+                className="quick-actions"
+                initial={{ opacity: 0, y: 10, scale: 0.94 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 8, scale: 0.96 }}
+              >
+                <button onClick={() => { setEditingTask(null); setTaskDialog(true); setQuickAddOpen(false); }}>
+                  <span className="quick-icon task"><ListTodo size={17} /></span>
+                  <span>New task</span>
+                </button>
+                <button onClick={() => { setEditingNote(null); setNoteDialog(true); setQuickAddOpen(false); }}>
+                  <span className="quick-icon note"><NotebookPen size={17} /></span>
+                  <span>New note</span>
+                </button>
+                <button onClick={() => { setEditingProject(null); setProjectDialog(true); setQuickAddOpen(false); }}>
+                  <span className="quick-icon" style={{ background: '#f5f3ff', color: '#7c3aed' }}><FolderGit2 size={17} /></span>
+                  <span>New project</span>
+                </button>
+                <button onClick={() => { setEditingResume(null); setResumeDialog(true); setQuickAddOpen(false); }}>
+                  <span className="quick-icon" style={{ background: '#eaf0ff', color: '#2547b8' }}><FileText size={17} /></span>
+                  <span>Save resume</span>
+                </button>
+                <button onClick={() => { navigateToTab('focus'); setQuickAddOpen(false); setTimerRunning(true); }}>
+                  <span className="quick-icon focus"><Timer size={17} /></span>
+                  <span>Start focus</span>
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          <motion.button
+            whileTap={{ scale: 0.92 }}
+            className={`main-fab ${quickAddOpen ? 'is-open' : ''}`}
+            onClick={() => setQuickAddOpen((v) => !v)}
+            aria-label={quickAddOpen ? 'Close quick actions' : 'Add new item'}
+          >
+            <motion.span animate={{ rotate: quickAddOpen ? 45 : 0 }} transition={{ duration: 0.18 }}>
+              <Plus size={22} />
+            </motion.span>
+          </motion.button>
         </Box>
       </Box>
-      <Box className="fab-area">
-        <AnimatePresence>{quickAddOpen && <motion.div className="quick-actions" initial={{ opacity: 0, y: 10, scale: 0.94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: 0.96 }}>
-          <button onClick={() => { setEditingTask(null); setTaskDialog(true); setQuickAddOpen(false); }}><span className="quick-icon task"><ListTodo size={17} /></span><span>New task</span></button>
-          <button onClick={() => { setEditingNote(null); setNoteDialog(true); setQuickAddOpen(false); }}><span className="quick-icon note"><NotebookPen size={17} /></span><span>New note</span></button>
-          <button onClick={() => { setEditingProject(null); setProjectDialog(true); setQuickAddOpen(false); }}><span className="quick-icon" style={{ background: '#f5f3ff', color: '#7c3aed' }}><FolderGit2 size={17} /></span><span>New project</span></button>
-          <button onClick={() => { setEditingResume(null); setResumeDialog(true); setQuickAddOpen(false); }}><span className="quick-icon" style={{ background: '#eaf0ff', color: '#2547b8' }}><FileText size={17} /></span><span>Save resume</span></button>
-          <button onClick={() => { setActiveTab('focus'); setQuickAddOpen(false); setTimerRunning(true); }}><span className="quick-icon focus"><Timer size={17} /></span><span>Start focus</span></button>
-        </motion.div>}</AnimatePresence>
-        <motion.button whileTap={{ scale: 0.92 }} className={`main-fab ${quickAddOpen ? 'is-open' : ''}`} onClick={() => setQuickAddOpen((v) => !v)} aria-label={quickAddOpen ? 'Close quick actions' : 'Add new item'}>
-          <motion.span animate={{ rotate: quickAddOpen ? 45 : 0 }} transition={{ duration: 0.18 }}><Plus size={24} /></motion.span>
-        </motion.button>
-      </Box>
 
-      <TaskDialog open={taskDialog} initial={editingTask} onClose={() => { setTaskDialog(false); setEditingTask(null); }} onSave={saveTask} />
+      <TaskDialog open={taskDialog} initial={editingTask} onClose={() => { setTaskDialog(false); setEditingTask(null); }} onSave={saveTask} orderedPhases={orderedPhases} />
       <NoteDialog open={noteDialog} initial={editingNote} onClose={() => { setNoteDialog(false); setEditingNote(null); }} onSave={saveNote} />
       <SettingsDialog
         open={settingsOpen}
@@ -869,16 +1385,49 @@ export default function App() {
         }}
         onHistory={() => { setSettingsOpen(false); setHistoryOpen(true); }}
         onResumes={() => { setSettingsOpen(false); setResumesOpen(true); }}
-        onProjects={() => { setSettingsOpen(false); setActiveTab('projects'); }}
+        onProjects={() => { setSettingsOpen(false); navigateToTab('projects'); }}
         onImport={handleImportState}
         onLogout={logout}
       />
       <ProjectFormDialog open={projectDialog} initial={editingProject} onClose={() => { setProjectDialog(false); setEditingProject(null); }} onSave={saveProject} />
-      <ResumesDialog open={resumesOpen} state={state} onClose={() => setResumesOpen(false)} onAddNew={() => { setEditingResume(null); setResumeDialog(true); }} onEdit={(item) => { setEditingResume(item); setResumeDialog(true); }} onDelete={deleteResumeApplication} />
+      <ResumesDialog
+        open={resumesOpen}
+        state={state}
+        onClose={() => setResumesOpen(false)}
+        onAddNew={() => { setEditingResume(null); setResumeDialog(true); }}
+        onEdit={(item) => { setEditingResume(item); setResumeDialog(true); }}
+        onDelete={(id) => {
+          const app = state.resumes.find((r) => r.id === id);
+          requestDelete(
+            'Delete Application',
+            `Are you sure you want to delete application for ${app?.company || 'this company'} (${app?.role || ''})?`,
+            () => deleteResumeApplication(id)
+          );
+        }}
+      />
       <ResumeFormDialog open={resumeDialog} initial={editingResume} onClose={() => { setResumeDialog(false); setEditingResume(null); }} onSave={saveResumeApplication} />
       <ReasonDialog open={Boolean(pendingAction)} action={pendingAction} reason={reason} setReason={setReason} otherReason={otherReason} setOtherReason={setOtherReason} onClose={() => setPendingAction(null)} onSubmit={submitReason} />
       <ReminderDialog open={pendingReminder && !pendingAction} state={state} onAction={openReason} onClose={() => setPendingReminder(false)} />
       <HistoryDialog open={historyOpen} state={state} onClose={() => setHistoryOpen(false)} />
+      <ReorderSyllabusDialog
+        open={reorderOpen}
+        onClose={() => setReorderOpen(false)}
+        orderedPhases={orderedPhases}
+        onMove={handleReorderPhase}
+        onReset={handleResetPhaseOrder}
+      />
+      <ConfirmDeleteDialog
+        open={confirmDelete.open}
+        title={confirmDelete.title}
+        message={confirmDelete.message}
+        onConfirm={confirmDelete.action}
+        onClose={() => setConfirmDelete((prev) => ({ ...prev, open: false }))}
+      />
+      <NewPhaseDialog
+        open={newPhaseOpen}
+        onClose={() => setNewPhaseOpen(false)}
+        onCreate={handleAddPhase}
+      />
       <Snackbar open={Boolean(toast)} autoHideDuration={4000} onClose={() => { setToast(''); setToastAction(null); }} anchorOrigin={{ vertical: 'top', horizontal: 'center' }}>
         <Alert
           onClose={() => { setToast(''); setToastAction(null); }}
@@ -925,6 +1474,7 @@ function Dashboard({
   onReminder,
   onNewTask,
   onStartFocus,
+  onLoadCurated,
 }: {
   state: AppState;
   progress: number;
@@ -943,10 +1493,15 @@ function Dashboard({
   onReminder: () => void;
   onNewTask?: () => void;
   onStartFocus?: () => void;
+  onLoadCurated?: () => void;
 }) {
-  const currentPhase = phases.find((phase) => phase.topics.some((topic) => state.topicStatus[topic.id] === 'In Progress')) || phases[0];
-  const phaseDone = currentPhase.topics.filter((topic) => state.topicStatus[topic.id] === 'Mastered').length;
-  const phaseProgress = percent(phaseDone, currentPhase.topics.length);
+  const activeSyllabus = useMemo(() => state.syllabus || [], [state.syllabus]);
+  const orderedPhases = useMemo(() => getOrderedPhases(activeSyllabus, state.phaseOrder), [activeSyllabus, state.phaseOrder]);
+  const currentPhase = orderedPhases.find((phase) => phase.topics.some((topic) => state.topicStatus[topic.id] === 'In Progress')) || orderedPhases[0] || null;
+  const currentPhaseIndex = currentPhase ? orderedPhases.findIndex((p) => p.id === currentPhase.id) : -1;
+  const displayCurrentPhaseNo = currentPhaseIndex >= 0 ? currentPhaseIndex + 1 : 1;
+  const phaseDone = currentPhase ? currentPhase.topics.filter((topic) => state.topicStatus[topic.id] === 'Mastered').length : 0;
+  const phaseProgress = currentPhase ? percent(phaseDone, currentPhase.topics.length) : 0;
 
   return (
     <Box className="home-clean-layout">
@@ -1013,8 +1568,10 @@ function Dashboard({
             <span>SYLLABUS</span>
             <span className="home-stat-icon blue"><GraduationCap size={16} /></span>
           </Box>
-          <Typography className="home-stat-value">{progress}%</Typography>
-          <Typography className="home-stat-sub">{mastered} of {totalTopics} topics mastered</Typography>
+          <Typography className="home-stat-value">{totalTopics > 0 ? `${progress}%` : '0%'}</Typography>
+          <Typography className="home-stat-sub">
+            {totalTopics > 0 ? `${mastered} of ${totalTopics} topics mastered` : 'No topics yet · Tap to start'}
+          </Typography>
           <Box className="home-stat-bar">
             <span style={{ width: `${progress}%` }} className="bar-blue" />
           </Box>
@@ -1137,53 +1694,105 @@ function Dashboard({
             )}
           </Paper>
 
-          {/* Continue Learning Phase Card */}
-          <Paper className="clean-section-card hero-animate" elevation={0}>
-            <Box className="clean-card-header">
-              <Box>
-                <Typography variant="h2" className="clean-card-title">Continue Learning</Typography>
-                <Typography variant="caption" color="text.secondary">
-                  Current syllabus roadmap milestone.
-                </Typography>
-              </Box>
-              <Chip
-                size="small"
-                label={`PHASE ${String(currentPhase.id).padStart(2, '0')}`}
-                className="clean-phase-tag"
-              />
-            </Box>
-
-            <Box className="clean-phase-content">
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+          {/* Continue Learning Phase Card or First-User Roadmap Card */}
+          {!currentPhase || orderedPhases.length === 0 ? (
+            <Paper className="clean-section-card hero-animate" elevation={0}>
+              <Box className="clean-card-header">
                 <Box>
-                  <Typography className="clean-phase-name">{currentPhase.name}</Typography>
+                  <Typography variant="h2" className="clean-card-title">Learning Roadmap</Typography>
                   <Typography variant="caption" color="text.secondary">
-                    {currentPhase.weeks} · {currentPhase.topics.length} core topics
+                    Build your personalized preparation plan.
                   </Typography>
                 </Box>
-                <Typography className="clean-phase-pct">{phaseProgress}%</Typography>
-              </Box>
-
-              <Box className="clean-phase-bar-track">
-                <span style={{ width: `${phaseProgress}%`, background: currentPhase.color || '#3563e9' }} />
-              </Box>
-
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pt: 0.5, flexWrap: 'wrap', gap: 1 }}>
-                <Typography variant="caption" color="text.secondary">
-                  {phaseDone} of {currentPhase.topics.length} topics mastered in this phase
-                </Typography>
                 <Button
                   size="small"
-                  variant="contained"
                   onClick={() => onGo('syllabus')}
                   endIcon={<ArrowRight size={14} />}
-                  sx={{ borderRadius: 2, fontWeight: 750, fontSize: 11 }}
+                  className="clean-card-link"
                 >
-                  Resume syllabus
+                  Open syllabus
                 </Button>
               </Box>
-            </Box>
-          </Paper>
+              <Box className="clean-empty-box" sx={{ py: 3, px: 2, textAlign: 'center' }}>
+                <span className="clean-empty-icon" style={{ background: '#eff4ff', color: '#3563e9' }}>
+                  <Layers3 size={22} />
+                </span>
+                <Typography fontWeight={800} sx={{ fontSize: 13, mt: 0.8 }}>Your roadmap starts here</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 360, mx: 'auto', mt: 0.4, display: 'block', lineHeight: 1.5 }}>
+                  Add custom topics to track what you study, or import our curated SDE roadmap.
+                </Typography>
+                <Stack direction="row" spacing={1} sx={{ mt: 1.5, justifyContent: 'center' }}>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    onClick={() => onGo('syllabus')}
+                    startIcon={<Plus size={14} />}
+                    sx={{ borderRadius: 2, fontWeight: 750 }}
+                  >
+                    Add first topic
+                  </Button>
+                  {onLoadCurated && (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={onLoadCurated}
+                      startIcon={<Sparkles size={14} />}
+                      sx={{ borderRadius: 2, fontWeight: 750 }}
+                    >
+                      Import SDE Roadmap
+                    </Button>
+                  )}
+                </Stack>
+              </Box>
+            </Paper>
+          ) : (
+            <Paper className="clean-section-card hero-animate" elevation={0}>
+              <Box className="clean-card-header">
+                <Box>
+                  <Typography variant="h2" className="clean-card-title">Continue Learning</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Current syllabus roadmap milestone.
+                  </Typography>
+                </Box>
+                <Chip
+                  size="small"
+                  label={`PHASE ${String(displayCurrentPhaseNo).padStart(2, '0')}`}
+                  className="clean-phase-tag"
+                />
+              </Box>
+
+              <Box className="clean-phase-content">
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                  <Box>
+                    <Typography className="clean-phase-name">{currentPhase.name}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {currentPhase.topics.length} core topics
+                    </Typography>
+                  </Box>
+                  <Typography className="clean-phase-pct">{phaseProgress}%</Typography>
+                </Box>
+
+                <Box className="clean-phase-bar-track">
+                  <span style={{ width: `${phaseProgress}%`, background: currentPhase.color || '#3563e9' }} />
+                </Box>
+
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pt: 0.5, flexWrap: 'wrap', gap: 1 }}>
+                  <Typography variant="caption" color="text.secondary">
+                    {phaseDone} of {currentPhase.topics.length} topics mastered in this phase
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    onClick={() => onGo('syllabus')}
+                    endIcon={<ArrowRight size={14} />}
+                    sx={{ borderRadius: 2, fontWeight: 750, fontSize: 11 }}
+                  >
+                    Resume syllabus
+                  </Button>
+                </Box>
+              </Box>
+            </Paper>
+          )}
         </Box>
 
         {/* Right Column: Focus Timer Launcher & Quick Navigation Hub */}
@@ -1282,35 +1891,516 @@ function PageSearch({ value, onChange, placeholder }: { value: string; onChange:
   return <TextField value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="page-search" InputProps={{ startAdornment: <InputAdornment position="start"><Search size={18} /></InputAdornment>, endAdornment: value ? <InputAdornment position="end"><IconButton size="small" onClick={() => onChange('')}><X size={15}/></IconButton></InputAdornment> : undefined }} />;
 }
 
-function Syllabus({ state, expandedPhase, setExpandedPhase, search, setSearch, setTopicStatus }: { state: AppState; expandedPhase: number | null; setExpandedPhase: (n: number | null) => void; search: string; setSearch: (s: string) => void; setTopicStatus: (id: string, status: AppState['topicStatus'][string]) => void }) {
-  const total = phases.reduce((sum, p) => sum + p.topics.length, 0);
-  const mastered = phases.flatMap((p) => p.topics).filter((t) => state.topicStatus[t.id] === 'Mastered').length;
-  const filtered = phases.map((phase) => ({ ...phase, topics: phase.topics.filter((topic) => `${topic.name} ${phase.name} ${phase.tags.join(' ')}`.toLowerCase().includes(search.toLowerCase())) })).filter((phase) => !search || phase.topics.length > 0);
-  return <Box>
-    <SectionHeading eyebrow="YOUR LEARNING MAP" title="Syllabus" subtitle="12 phases. One clear view of where you are." action={<Button variant="outlined" startIcon={<Search size={16} />} onClick={() => document.querySelector<HTMLInputElement>('.page-search input')?.focus()}>Find a topic</Button>} />
-    <Paper className="syllabus-overview hero-animate" elevation={0}><Box className="syllabus-progress-ring"><Box><strong>{percent(mastered, total)}%</strong><span>mastered</span></Box></Box><Box sx={{ flex: 1 }}><Typography variant="h3">Your progress, at a glance</Typography><Typography color="text.secondary" variant="body2" sx={{ mt: 0.55 }}>{mastered} of {total} main topics marked as mastered</Typography><Box className="segmented-progress">{phases.map((p) => { const count = p.topics.filter((t) => state.topicStatus[t.id] === 'Mastered').length; return <span key={p.id} title={p.name} style={{ flex: p.topics.length, background: count ? p.color : '#E9EDF5', opacity: count ? 0.55 + 0.45 * count / p.topics.length : 1 }} />; })}</Box><Typography variant="caption" color="text.secondary">DSA stays available as a parallel learning track.</Typography></Box></Paper>
-    <Box className="syllabus-tools"><PageSearch value={search} onChange={setSearch} placeholder="Search topics, phases, or skill tags…" /><Box className="filter-hint"><span className="legend-dot mastered"/> Mastered <span className="legend-dot progress"/> In progress <span className="legend-dot revision"/> Revise</Box></Box>
-    <Box className="phase-list">
-      {filtered.map((phase) => {
-        const done = phase.topics.filter((t) => state.topicStatus[t.id] === 'Mastered').length;
-        const open = expandedPhase === phase.id || Boolean(search);
-        return <Paper className={`phase-card hero-animate ${open ? 'expanded' : ''}`} elevation={0} key={phase.id}>
-          <button className="phase-head" onClick={() => setExpandedPhase(open && !search ? null : phase.id)}>
-            <span className="phase-number" style={{ background: `${phase.color}16`, color: phase.color }}>{String(phase.id).padStart(2, '0')}</span><span className="phase-name-block"><strong>{phase.name}</strong><small>{phase.weeks} · {phase.topics.length} topics</small></span><span className="phase-progress-number">{percent(done, phase.topics.length)}%</span><span className="phase-chevron">{open ? <ChevronDown size={19}/> : <ChevronRight size={19}/>}</span>
-          </button>
-          <Box className="phase-progress-bar"><span style={{ width: `${percent(done, phase.topics.length)}%`, background: phase.color }}/></Box>
-          {open && <Box className="phase-topic-list">{phase.topics.map((topic) => {
-            const status = state.topicStatus[topic.id] || 'Not Started';
-            return <Box key={topic.id} className="topic-row"><Box className={`topic-state-dot state-${status.toLowerCase().replaceAll(' ', '-')}`}>{status === 'Mastered' ? <Check size={13}/> : status === 'In Progress' ? <span/> : status === 'Needs Revision' ? <ArrowDownRight size={12}/> : null}</Box><Box className="topic-row-name"><Typography>{topic.name}</Typography><Typography variant="caption" color="text.secondary">{status === 'Mastered' ? 'Looking good' : status === 'Needs Revision' ? 'Add to revision queue' : status === 'In Progress' ? 'Keep going' : 'Ready when you are'}</Typography></Box><FormControl size="small" className="topic-status-select"><Select value={status} onChange={(e) => setTopicStatus(topic.id, e.target.value as AppState['topicStatus'][string])} renderValue={(v) => <span className={`status-select-label status-${v.toLowerCase().replaceAll(' ', '-')}`}>{v}</span>}>
-              {STATUSES.map((s) => <MenuItem key={s} value={s}><span className={`status-option-dot status-${s.toLowerCase().replaceAll(' ', '-')}`}/>{s}</MenuItem>)}
-            </Select></FormControl></Box>;
-          })}</Box>}
-          <Box className="phase-tags">{phase.tags.map((tag) => <span key={tag}>{tag}</span>)}</Box>
-        </Paper>;
-      })}
+function InlineAddTopic({ onAdd }: { onAdd: (name: string) => void }) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState('');
+
+  if (!adding) {
+    return (
+      <Button
+        variant="outlined"
+        size="small"
+        startIcon={<Plus size={14} />}
+        onClick={() => setAdding(true)}
+        className="add-subheading-btn"
+        sx={{ mt: 1.5, mb: 0.5, textTransform: 'none', borderRadius: 2, fontSize: 11, fontWeight: 700 }}
+      >
+        + Add Sub-heading (e.g. React, Node)
+      </Button>
+    );
+  }
+
+  return (
+    <Box sx={{ display: 'flex', gap: 1, mt: 1.5, mb: 0.5, alignItems: 'center' }}>
+      <TextField
+        size="small"
+        placeholder="Sub-heading name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        autoFocus
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            if (name.trim()) {
+              onAdd(name.trim());
+              setName('');
+              setAdding(false);
+            }
+          } else if (e.key === 'Escape') {
+            setAdding(false);
+          }
+        }}
+        sx={{ flex: 1 }}
+      />
+      <Button
+        size="small"
+        variant="contained"
+        disabled={!name.trim()}
+        onClick={() => {
+          if (name.trim()) {
+            onAdd(name.trim());
+            setName('');
+            setAdding(false);
+          }
+        }}
+        sx={{ textTransform: 'none', fontWeight: 700 }}
+      >
+        Add
+      </Button>
+      <IconButton size="small" onClick={() => setAdding(false)}>
+        <X size={16} />
+      </IconButton>
     </Box>
-    <Box className="small-note"><Sparkles size={16}/><Typography variant="body2">Mastery is a self-assessment, not just a checkbox. Change a topic's status whenever your understanding changes.</Typography></Box>
-  </Box>;
+  );
+}
+
+function InlineAddSubtopic({ onAdd }: { onAdd: (name: string) => void }) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState('');
+
+  if (!adding) {
+    return (
+      <button
+        type="button"
+        className="add-subtopic-trigger"
+        onClick={() => setAdding(true)}
+      >
+        <Plus size={11} /> Add detailed topic
+      </button>
+    );
+  }
+
+  return (
+    <Box sx={{ display: 'flex', gap: 0.8, alignItems: 'center', mt: 0.8 }}>
+      <TextField
+        size="small"
+        placeholder="Detailed topic name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        autoFocus
+        sx={{
+          flex: 1,
+          '& .MuiInputBase-input': { fontSize: 11, py: 0.5, px: 1 },
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            if (name.trim()) {
+              onAdd(name.trim());
+              setName('');
+              setAdding(false);
+            }
+          } else if (e.key === 'Escape') {
+            setAdding(false);
+          }
+        }}
+      />
+      <Button
+        size="small"
+        variant="contained"
+        disabled={!name.trim()}
+        onClick={() => {
+          if (name.trim()) {
+            onAdd(name.trim());
+            setName('');
+            setAdding(false);
+          }
+        }}
+        sx={{ textTransform: 'none', fontSize: 11, py: 0.4, px: 1.2, minWidth: 'auto', fontWeight: 700 }}
+      >
+        Save
+      </Button>
+      <IconButton size="small" onClick={() => setAdding(false)}>
+        <X size={14} />
+      </IconButton>
+    </Box>
+  );
+}
+
+function Syllabus({
+  state,
+  expandedPhase,
+  setExpandedPhase,
+  search,
+  setSearch,
+  setTopicStatus,
+  onReorderPhase,
+  onOpenReorder,
+  onOpenNewPhase,
+  onAddTopic,
+  onDeleteTopic,
+  onAddSubtopic,
+  onDeleteSubtopic,
+  onToggleSubtopic,
+  onDeletePhase,
+  onRequestDelete,
+  onLoadCurated,
+}: {
+  state: AppState;
+  expandedPhase: number | null;
+  setExpandedPhase: (n: number | null) => void;
+  search: string;
+  setSearch: (s: string) => void;
+  setTopicStatus: (id: string, status: AppState['topicStatus'][string]) => void;
+  onReorderPhase: (phaseId: number, direction: 'up' | 'down') => void;
+  onOpenReorder: () => void;
+  onOpenNewPhase: () => void;
+  onAddTopic: (phaseId: number, name: string) => void;
+  onDeleteTopic: (phaseId: number, topicId: string) => void;
+  onAddSubtopic: (phaseId: number, topicId: string, subName: string) => void;
+  onDeleteSubtopic: (phaseId: number, topicId: string, subId: string) => void;
+  onToggleSubtopic: (subId: string) => void;
+  onDeletePhase: (phaseId: number) => void;
+  onRequestDelete: (title: string, message: string, action: () => void) => void;
+  onLoadCurated?: () => void;
+}) {
+  const currentSyllabus = useMemo(() => state.syllabus || [], [state.syllabus]);
+  const ordered = useMemo(() => getOrderedPhases(currentSyllabus, state.phaseOrder), [currentSyllabus, state.phaseOrder]);
+  const total = ordered.reduce((sum, p) => sum + p.topics.length, 0);
+  const mastered = ordered.flatMap((p) => p.topics).filter((t) => state.topicStatus[t.id] === 'Mastered').length;
+  const filtered = ordered
+    .map((phase) => ({
+      ...phase,
+      topics: phase.topics.filter((topic) =>
+        `${topic.name} ${phase.name} ${phase.tags.join(' ')}`.toLowerCase().includes(search.toLowerCase())
+      ),
+    }))
+    .filter((phase) => !search || phase.topics.length > 0);
+
+  return (
+    <Box>
+      <SectionHeading
+        eyebrow="YOUR LEARNING MAP"
+        title="Syllabus"
+        subtitle={
+          ordered.length > 0
+            ? `${ordered.length} topics. Customise the order to match your target.`
+            : 'Your roadmap is empty. Add your topics or import the curated SDE curriculum.'
+        }
+        action={
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <Button variant="contained" size="small" startIcon={<Plus size={15} />} onClick={onOpenNewPhase} sx={{ fontWeight: 750 }}>
+              New Topic
+            </Button>
+            {ordered.length > 0 ? (
+              <>
+                <Button variant="outlined" size="small" startIcon={<ArrowUpDown size={15} />} onClick={onOpenReorder}>
+                  Reorder
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<Search size={15} />}
+                  onClick={() => document.querySelector<HTMLInputElement>('.page-search input')?.focus()}
+                >
+                  Find
+                </Button>
+              </>
+            ) : (
+              onLoadCurated && (
+                <Button variant="outlined" size="small" startIcon={<Sparkles size={15} />} onClick={onLoadCurated} sx={{ fontWeight: 650 }}>
+                  Import SDE Roadmap
+                </Button>
+              )
+            )}
+          </Stack>
+        }
+      />
+      {ordered.length === 0 ? (
+        <Paper
+          className="empty-state hero-animate"
+          elevation={0}
+          sx={{
+            py: { xs: 5, sm: 6 },
+            px: { xs: 3, sm: 4 },
+            textAlign: 'center',
+            borderRadius: '24px',
+            border: '1.5px dashed rgba(24, 62, 131, 0.18)',
+            background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFD 100%)',
+            boxShadow: '0 12px 36px -12px rgba(15, 23, 42, 0.08)',
+            mt: 1.5,
+          }}
+        >
+          <Box
+            sx={{
+              width: 64,
+              height: 64,
+              borderRadius: '20px',
+              bgcolor: 'rgba(37, 99, 235, 0.08)',
+              color: '#2563EB',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              mb: 2,
+            }}
+          >
+            <Layers3 size={32} />
+          </Box>
+          <Typography variant="h3" sx={{ fontWeight: 800, color: '#0F172A', mb: 1, fontSize: '1.35rem' }}>
+            Start your learning roadmap
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 460, mx: 'auto', mb: 3.5, lineHeight: 1.6 }}>
+            You have a clean slate. Organize your learning journey with custom topics, subtopics, and progress tracking, or start with the full curated SDE curriculum.
+          </Typography>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="center">
+            <Button
+              variant="contained"
+              size="large"
+              startIcon={<Plus size={18} />}
+              onClick={onOpenNewPhase}
+              sx={{ borderRadius: '14px', fontWeight: 700, px: 3, py: 1.25, boxShadow: '0 8px 20px -4px rgba(37, 99, 235, 0.35)' }}
+            >
+              Create first topic
+            </Button>
+            {onLoadCurated && (
+              <Button
+                variant="outlined"
+                size="large"
+                startIcon={<Sparkles size={18} />}
+                onClick={onLoadCurated}
+                sx={{ borderRadius: '14px', fontWeight: 700, px: 3, py: 1.25 }}
+              >
+                Import SDE Roadmap (12 Phases)
+              </Button>
+            )}
+          </Stack>
+        </Paper>
+      ) : (
+        <>
+          <Paper className="syllabus-overview hero-animate" elevation={0}>
+        <Box className="syllabus-progress-ring">
+          <Box>
+            <strong>{percent(mastered, total)}%</strong>
+            <span>mastered</span>
+          </Box>
+        </Box>
+        <Box sx={{ flex: 1 }}>
+          <Typography variant="h3">Your progress, at a glance</Typography>
+          <Typography color="text.secondary" variant="body2" sx={{ mt: 0.55 }}>
+            {mastered} of {total} main topics marked as mastered
+          </Typography>
+          <Box className="segmented-progress">
+            {ordered.map((p) => {
+              const count = p.topics.filter((t) => state.topicStatus[t.id] === 'Mastered').length;
+              return (
+                <span
+                  key={p.id}
+                  title={p.name}
+                  style={{
+                    flex: Math.max(1, p.topics.length),
+                    background: count ? p.color : '#E9EDF5',
+                    opacity: count ? 0.55 + (0.45 * count) / (p.topics.length || 1) : 1,
+                  }}
+                />
+              );
+            })}
+          </Box>
+          <Typography variant="caption" color="text.secondary">
+            DSA stays available as a parallel learning track.
+          </Typography>
+        </Box>
+      </Paper>
+      <Box className="syllabus-tools">
+        <PageSearch value={search} onChange={setSearch} placeholder="Search topics…" />
+        <Box className="filter-hint">
+          <span className="legend-dot mastered" /> Mastered <span className="legend-dot progress" /> In progress <span className="legend-dot revision" /> Revise
+        </Box>
+      </Box>
+      <Box className="phase-list">
+        {filtered.length === 0 ? (
+          <Paper className="empty-state hero-animate" elevation={0} sx={{ mt: 2, py: 4, textAlign: 'center' }}>
+            <Typography variant="h3" sx={{ fontSize: '1.1rem' }}>No matching topics found</Typography>
+            <Typography color="text.secondary" variant="body2" sx={{ mt: 0.5, mb: 2 }}>
+              Try searching for something else or clear the search filter.
+            </Typography>
+            <Button variant="outlined" size="small" onClick={() => setSearch('')}>
+              Clear Search
+            </Button>
+          </Paper>
+        ) : (
+          filtered.map((phase, idx) => {
+          const done = phase.topics.filter((t) => state.topicStatus[t.id] === 'Mastered').length;
+          const open = expandedPhase === phase.id || Boolean(search);
+          const phaseOrderIndex = ordered.findIndex((p) => p.id === phase.id);
+          const displayPhaseNo = phaseOrderIndex >= 0 ? phaseOrderIndex + 1 : idx + 1;
+
+          return (
+            <Paper className={`phase-card hero-animate ${open ? 'expanded' : ''}`} elevation={0} key={phase.id}>
+              <button className="phase-head" onClick={() => setExpandedPhase(open && !search ? null : phase.id)}>
+                <span className="phase-number" style={{ background: `${phase.color}16`, color: phase.color }}>
+                  {String(displayPhaseNo).padStart(2, '0')}
+                </span>
+                <span className="phase-name-block">
+                  <strong>{phase.name}</strong>
+                  <small>{phase.topics.length} topics</small>
+                </span>
+                <span className="phase-progress-number">{percent(done, phase.topics.length)}%</span>
+                <Box className="phase-reorder-group" onClick={(e) => e.stopPropagation()}>
+                  <IconButton
+                    size="small"
+                    className="phase-reorder-btn"
+                    disabled={idx === 0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onReorderPhase(phase.id, 'up');
+                    }}
+                    aria-label={`Move phase ${phase.name} up`}
+                  >
+                    <ArrowUp size={13} />
+                  </IconButton>
+                  <IconButton
+                    size="small"
+                    className="phase-reorder-btn"
+                    disabled={idx === filtered.length - 1}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onReorderPhase(phase.id, 'down');
+                    }}
+                    aria-label={`Move phase ${phase.name} down`}
+                  >
+                    <ArrowDown size={13} />
+                  </IconButton>
+                  <IconButton
+                    size="small"
+                    className="phase-reorder-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRequestDelete(
+                        'Delete Topic Phase',
+                        `Are you sure you want to delete "${phase.name}" and all its sub-headings?`,
+                        () => onDeletePhase(phase.id)
+                      );
+                    }}
+                    aria-label={`Delete phase ${phase.name}`}
+                    title="Delete phase"
+                    sx={{ color: '#ef4444' }}
+                  >
+                    <Trash2 size={13} />
+                  </IconButton>
+                </Box>
+                <span className="phase-chevron">{open ? <ChevronDown size={19} /> : <ChevronRight size={19} />}</span>
+              </button>
+              <Box className="phase-progress-bar">
+                <span style={{ width: `${percent(done, phase.topics.length)}%`, background: phase.color }} />
+              </Box>
+              {open && (
+                <Box className="phase-topic-list">
+                  {phase.topics.map((topic) => {
+                    const status = state.topicStatus[topic.id] || 'Not Started';
+                    const subs = topic.subtopics || [];
+                    const completedSubs = subs.filter((s) => state.subtopicStatus?.[s.id]).length;
+
+                    return (
+                      <Box key={topic.id} className="topic-block">
+                        <Box className="topic-row">
+                          <Box className={`topic-state-dot state-${status.toLowerCase().replaceAll(' ', '-')}`}>
+                            {status === 'Mastered' ? <Check size={13} /> : status === 'In Progress' ? <span /> : status === 'Needs Revision' ? <ArrowDownRight size={12} /> : null}
+                          </Box>
+                          <Box className="topic-row-name">
+                            <Typography>{topic.name}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {status === 'Mastered' ? 'Looking good' : status === 'Needs Revision' ? 'Add to revision queue' : status === 'In Progress' ? 'Keep going' : 'Ready when you are'}
+                              {subs.length > 0 && ` · ${completedSubs}/${subs.length} detailed items`}
+                            </Typography>
+                          </Box>
+                          <FormControl size="small" className="topic-status-select">
+                            <Select
+                              value={status}
+                              onChange={(e) => setTopicStatus(topic.id, e.target.value as AppState['topicStatus'][string])}
+                              renderValue={(v) => <span className={`status-select-label status-${v.toLowerCase().replaceAll(' ', '-')}`}>{v}</span>}
+                            >
+                              {STATUSES.map((s) => (
+                                <MenuItem key={s} value={s}>
+                                  <span className={`status-option-dot status-${s.toLowerCase().replaceAll(' ', '-')}`} />
+                                  {s}
+                                </MenuItem>
+                              ))}
+                            </Select>
+                          </FormControl>
+                          <IconButton
+                            size="small"
+                            className="topic-delete-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRequestDelete(
+                                'Delete Sub-heading',
+                                `Are you sure you want to delete "${topic.name}"?`,
+                                () => onDeleteTopic(phase.id, topic.id)
+                              );
+                            }}
+                            aria-label={`Delete ${topic.name}`}
+                            title="Delete sub-heading"
+                          >
+                            <Trash2 size={14} />
+                          </IconButton>
+                        </Box>
+
+                        {/* Detailed Subtopics */}
+                        <Box className="subtopics-container">
+                          {subs.length > 0 && (
+                            <Box className="subtopics-list">
+                              {subs.map((sub) => {
+                                const isDone = Boolean(state.subtopicStatus?.[sub.id]);
+                                return (
+                                  <Box key={sub.id} className={`subtopic-item ${isDone ? 'completed' : ''}`}>
+                                    <button
+                                      type="button"
+                                      className={`subtopic-check ${isDone ? 'done' : ''}`}
+                                      onClick={() => onToggleSubtopic(sub.id)}
+                                      title={isDone ? 'Mark incomplete' : 'Mark complete'}
+                                    >
+                                      {isDone && <Check size={10} />}
+                                    </button>
+                                    <span className="subtopic-title" onClick={() => onToggleSubtopic(sub.id)}>
+                                      {sub.name}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="subtopic-del-btn"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onRequestDelete(
+                                          'Delete Subtopic',
+                                          `Are you sure you want to delete "${sub.name}"?`,
+                                          () => onDeleteSubtopic(phase.id, topic.id, sub.id)
+                                        );
+                                      }}
+                                      title="Delete detailed topic"
+                                    >
+                                      <X size={12} />
+                                    </button>
+                                  </Box>
+                                );
+                              })}
+                            </Box>
+                          )}
+                          <InlineAddSubtopic onAdd={(subName) => onAddSubtopic(phase.id, topic.id, subName)} />
+                        </Box>
+                      </Box>
+                    );
+                  })}
+                  <InlineAddTopic onAdd={(tName) => onAddTopic(phase.id, tName)} />
+                </Box>
+              )}
+              <Box className="phase-tags">
+                {phase.tags.map((tag) => (
+                  <span key={tag}>{tag}</span>
+                ))}
+              </Box>
+            </Paper>
+          );
+        }))}
+      </Box>
+      <Box className="small-note">
+        <Sparkles size={16} />
+        <Typography variant="body2">
+          Mastery is a self-assessment, not just a checkbox. Change a topic's status whenever your understanding changes.
+        </Typography>
+      </Box>
+    </>
+  )}
+</Box>
+  );
 }
 
 function Tasks({ state, search, setSearch, onAdd, onEdit, onToggle, onDelete }: { state: AppState; search: string; setSearch: (s: string) => void; onAdd: () => void; onEdit: (t: Task) => void; onToggle: (id: string) => void; onDelete: (id: string) => void }) {
@@ -1325,11 +2415,36 @@ function Tasks({ state, search, setSearch, onAdd, onEdit, onToggle, onDelete }: 
   return <Box>
     <SectionHeading eyebrow="MAKE SPACE FOR WHAT MATTERS" title="Tasks" subtitle={`${doneCount} completed · ${state.tasks.length - doneCount} left in your list`} action={<Button variant="contained" startIcon={<Plus size={17}/>} onClick={onAdd}>New task</Button>} />
     <Paper className="tasks-summary hero-animate" elevation={0}><Box className="tasks-summary-icon"><CheckCheck size={22}/></Box><Box sx={{ flex: 1 }}><Typography fontWeight={800}>You’ve got this.</Typography><Typography color="text.secondary" variant="body2">Keep tasks small, clear, and connected to a topic.</Typography></Box><Box className="tasks-summary-count"><strong>{doneCount}/{state.tasks.length}</strong><span>done</span></Box></Paper>
-    <Box className="tasks-tools"><PageSearch value={search} onChange={setSearch} placeholder="Search your tasks…"/><Box className="task-filters">{(['Today', 'Upcoming', 'Overdue', 'Completed', 'All'] as const).map((name) => <button key={name} className={filter === name ? 'selected' : ''} onClick={() => setFilter(name)}>{name}{name === 'Today' && <span>{state.tasks.filter((t) => !t.done && (!t.dueDate || t.dueDate <= today)).length}</span>}</button>)}</Box></Box>
+    <Box className="tasks-tools"><PageSearch value={search} onChange={setSearch} placeholder="Search tasks…"/><Box className="task-filters">{(['Today', 'Upcoming', 'Overdue', 'Completed', 'All'] as const).map((name) => <button key={name} className={filter === name ? 'selected' : ''} onClick={() => setFilter(name)}>{name}{name === 'Today' && <span>{state.tasks.filter((t) => !t.done && (!t.dueDate || t.dueDate <= today)).length}</span>}</button>)}</Box></Box>
     <Box className="tasks-list">{filtered.length === 0 ? <Paper className="empty-state" elevation={0}><span className="empty-bubble"><ListTodo size={25}/></span><Typography variant="h3">Nothing on this list</Typography><Typography color="text.secondary" sx={{ mt: 0.6 }}>Add a task or switch to another view.</Typography><Button variant="contained" sx={{ mt: 2 }} startIcon={<Plus size={16}/>} onClick={onAdd}>Create a task</Button></Paper> : filtered.map((task) => <Paper className={`task-card hero-animate ${task.done ? 'task-card-done' : ''}`} elevation={0} key={task.id}>
       <button className={`task-check large ${task.done ? 'checked' : ''}`} onClick={() => onToggle(task.id)} aria-label={task.done ? 'Mark incomplete' : 'Complete task'}>{task.done && <Check size={15}/>}</button>
       <Box className="task-card-content" onClick={() => onEdit(task)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEdit(task); } }} role="button" tabIndex={0}><Typography fontWeight={800} className={task.done ? 'done-text' : ''}>{task.title}</Typography><Typography variant="body2" color="text.secondary" sx={{ mt: 0.4 }}>{task.description || topicName(task.topicId)}</Typography><Box className="task-meta"><Chip size="small" label={topicName(task.topicId)} className="topic-chip"/><span className={`priority-badge ${task.priority.toLowerCase()}`}><i/>{task.priority}</span>{task.dueDate && <span className={`due-label ${!task.done && task.dueDate < today ? 'overdue' : ''}`}><CalendarDays size={13}/>{task.dueDate === today ? 'Today' : task.dueDate}</span>}</Box></Box>
-      <Box className="task-actions"><IconButton size="small" onClick={() => onEdit(task)} aria-label="Edit task"><MoreHorizontal size={18}/></IconButton><IconButton size="small" onClick={() => onDelete(task.id)} aria-label="Delete task"><Trash2 size={16}/></IconButton></Box>
+      <Box className="task-actions">
+        <IconButton
+          size="small"
+          className="task-action-btn edit"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit(task);
+          }}
+          aria-label="Edit task"
+          title="Edit task"
+        >
+          <Pencil size={16} />
+        </IconButton>
+        <IconButton
+          size="small"
+          className="task-action-btn delete"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(task.id);
+          }}
+          aria-label="Delete task"
+          title="Delete task"
+        >
+          <Trash2 size={16} />
+        </IconButton>
+      </Box>
     </Paper>)}</Box>
   </Box>;
 }
@@ -1420,6 +2535,69 @@ function Projects({
         }
       />
 
+      {/* Developer Profiles & Live Portfolio Banner */}
+      <Paper className="developer-links-banner hero-animate" elevation={0}>
+        <Box className="developer-links-info">
+          <Avatar className="developer-links-avatar">V</Avatar>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography className="developer-name">Vishnu | SDE Aspirant</Typography>
+            <Typography variant="caption" color="text.secondary">
+              Official developer profiles & live portfolio
+            </Typography>
+          </Box>
+        </Box>
+        <Box className="developer-links-buttons">
+          <a
+            href={DEV_LINKS.github}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="dev-link-btn github"
+            onClick={(e) => {
+              e.stopPropagation();
+              openExternalUrl(DEV_LINKS.github);
+            }}
+          >
+            <Github size={15} />
+            <span>GitHub</span>
+            <ArrowUpRight size={13} className="dev-link-arrow" />
+          </a>
+          <a
+            href={DEV_LINKS.portfolio}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="dev-link-btn portfolio"
+            onClick={(e) => {
+              e.stopPropagation();
+              openExternalUrl(DEV_LINKS.portfolio);
+            }}
+          >
+            <Globe size={15} />
+            <span>Portfolio</span>
+            <ArrowUpRight size={13} className="dev-link-arrow" />
+          </a>
+          <a
+            href={DEV_LINKS.linkedin}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="dev-link-btn linkedin"
+            onClick={(e) => {
+              e.stopPropagation();
+              openExternalUrl(DEV_LINKS.linkedin);
+            }}
+          >
+            <Linkedin size={15} />
+            <span>LinkedIn</span>
+            <ArrowUpRight size={13} className="dev-link-arrow" />
+          </a>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.8, borderRadius: 2, background: 'rgba(255, 255, 255, 0.9)', border: '1px solid #dce6fb', width: { xs: '100%', sm: 'auto' } }}>
+          <Mail size={14} style={{ color: '#3563e9', flexShrink: 0 }} />
+          <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: '#1e293b', userSelect: 'all' }}>
+            {DEV_LINKS.email}
+          </Typography>
+        </Box>
+      </Paper>
+
       <Box className="projects-summary-grid hero-animate">
         <Paper className="projects-summary-card" elevation={0}>
           <Box className="proj-stat-head">
@@ -1456,7 +2634,7 @@ function Projects({
       </Box>
 
       <Box className="projects-tools">
-        <PageSearch value={search} onChange={setSearch} placeholder="Search by title, tech stack (e.g. React, Docker), or keyword…" />
+        <PageSearch value={search} onChange={setSearch} placeholder="Search projects…" />
         <Box className="projects-filters">
           {(['All', 'Featured', 'Active', 'In Progress', 'Completed', 'Archived'] as const).map((filter) => (
             <button
@@ -1642,7 +2820,37 @@ function FocusPage({ state, selectedTopic, setSelectedTopic, timerLength, setTim
         <Typography variant="caption" color="text.secondary" sx={{ mt: 2, textAlign: 'center' }}>Stay with it. Breaks are part of the process.</Typography>
       </Paper>
       <Box className="focus-side">
-        <Paper className="focus-topic-card hero-animate" elevation={0}><Box className="card-heading-row"><Box><Typography variant="h3">What are you working on?</Typography><Typography color="text.secondary" variant="body2" sx={{ mt: 0.4 }}>Log time against a topic.</Typography></Box><Target size={21} color="#3563E9"/></Box><FormControl fullWidth size="small" sx={{ mt: 2 }}><Select value={selectedTopic} onChange={(e) => setSelectedTopic(e.target.value)}>{phases.map((phase) => [<ListSubheader key={`phase-${phase.id}`} disableSticky>{phase.name}</ListSubheader>, ...phase.topics.map((topic) => <MenuItem key={topic.id} value={topic.id}>{topic.name}</MenuItem>)] )}</Select></FormControl><Box className="selected-topic-preview"><span className="topic-orbit"><Code2 size={20}/></span><Box><Typography fontWeight={800}>{topicName(selectedTopic)}</Typography><Typography variant="caption" color="text.secondary">Selected focus topic</Typography></Box></Box></Paper>
+        <Paper className="focus-topic-card hero-animate" elevation={0}>
+          <Box className="card-heading-row">
+            <Box>
+              <Typography variant="h3">What are you working on?</Typography>
+              <Typography color="text.secondary" variant="body2" sx={{ mt: 0.4 }}>Type your current focus objective.</Typography>
+            </Box>
+            <Target size={21} color="#3563E9"/>
+          </Box>
+          <TextField
+            fullWidth
+            size="small"
+            placeholder="What are you focusing on?"
+            value={selectedTopic}
+            onChange={(e) => setSelectedTopic(e.target.value)}
+            sx={{ mt: 2 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Code2 size={18} color="#3563E9" />
+                </InputAdornment>
+              ),
+            }}
+          />
+          <Box className="selected-topic-preview">
+            <span className="topic-orbit"><Code2 size={20}/></span>
+            <Box>
+              <Typography fontWeight={800}>{selectedTopic.trim() || 'Custom Focus Task'}</Typography>
+              <Typography variant="caption" color="text.secondary">Current focus objective</Typography>
+            </Box>
+          </Box>
+        </Paper>
         <Paper className="focus-summary-card hero-animate" elevation={0}><Box className="summary-icon-row"><span className="summary-soft-icon"><Clock3 size={19}/></span><Box><Typography variant="h3">Your focus history</Typography><Typography variant="body2" color="text.secondary">Every session counts.</Typography></Box></Box><Box className="focus-summary-stats"><Box><strong>{state.sessions.length}</strong><span>Sessions</span></Box><Box><strong>{Math.floor(totalMinutes / 60)}h {totalMinutes % 60}m</strong><span>Total time</span></Box><Box><strong>{state.sessions.filter((s) => s.completed).length}</strong><span>Completed</span></Box></Box><Button fullWidth variant="outlined" onClick={onHistory}>View session history</Button></Paper>
         <Paper className="focus-tip hero-animate" elevation={0}><Sparkles size={18}/><Box><Typography fontWeight={800}>A tiny focus ritual</Typography><Typography variant="body2" color="text.secondary" sx={{ mt: 0.35, lineHeight: 1.55 }}>Write the next action before starting. When the timer ends, jot one thing you learned.</Typography></Box></Paper>
       </Box>
@@ -1650,7 +2858,270 @@ function FocusPage({ state, selectedTopic, setSelectedTopic, timerLength, setTim
   </Box>;
 }
 
-function TaskDialog({ open, initial, onClose, onSave }: { open: boolean; initial: Task | null; onClose: () => void; onSave: (task: Omit<Task, 'id' | 'createdAt' | 'done'> & Partial<Pick<Task, 'id' | 'createdAt' | 'done'>>) => void }) {
+function ReorderSyllabusDialog({
+  open,
+  onClose,
+  orderedPhases,
+  onMove,
+  onReset,
+}: {
+  open: boolean;
+  onClose: () => void;
+  orderedPhases: Phase[];
+  onMove: (phaseId: number, direction: 'up' | 'down') => void;
+  onReset: () => void;
+}) {
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs" className="reorder-dialog">
+      <DialogTitle sx={{ pb: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <ArrowUpDown size={20} color="#2563eb" />
+          <Typography variant="h3" sx={{ fontSize: 18, fontWeight: 800 }}>
+            Reorder Roadmap
+          </Typography>
+        </Box>
+        <IconButton size="small" onClick={onClose} aria-label="Close dialog">
+          <X size={18} />
+        </IconButton>
+      </DialogTitle>
+      <DialogContent dividers sx={{ p: 1.5, maxHeight: '60vh', overflowY: 'auto' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5, px: 0.5 }}>
+          Move phases up or down to align with your personal interview timeline.
+        </Typography>
+        <Stack spacing={1}>
+          {orderedPhases.map((phase, idx) => (
+            <Paper
+              key={phase.id}
+              elevation={0}
+              sx={{
+                p: 1.2,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                border: '1px solid #e2e8f0',
+                borderRadius: '12px',
+                background: '#ffffff',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, minWidth: 0 }}>
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 26,
+                    height: 26,
+                    borderRadius: 7,
+                    fontSize: 12,
+                    fontWeight: 800,
+                    background: `${phase.color}18`,
+                    color: phase.color,
+                    flexShrink: 0,
+                  }}
+                >
+                  {idx + 1}
+                </span>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography
+                    variant="body2"
+                    fontWeight={700}
+                    noWrap
+                    sx={{ color: '#1e293b', fontSize: 13 }}
+                  >
+                    {phase.name}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: 11, display: 'block' }}>
+                    {phase.topics.length} topics
+                  </Typography>
+                </Box>
+              </Box>
+
+              <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0, ml: 1 }}>
+                <IconButton
+                  size="small"
+                  className="reorder-action-btn"
+                  disabled={idx === 0}
+                  onClick={() => onMove(phase.id, 'up')}
+                  aria-label={`Move ${phase.name} up`}
+                >
+                  <ArrowUp size={15} />
+                </IconButton>
+                <IconButton
+                  size="small"
+                  className="reorder-action-btn"
+                  disabled={idx === orderedPhases.length - 1}
+                  onClick={() => onMove(phase.id, 'down')}
+                  aria-label={`Move ${phase.name} down`}
+                >
+                  <ArrowDown size={15} />
+                </IconButton>
+              </Stack>
+            </Paper>
+          ))}
+        </Stack>
+      </DialogContent>
+      <DialogActions sx={{ p: 2, justifyContent: 'space-between' }}>
+        <Button size="small" color="inherit" onClick={onReset} sx={{ textTransform: 'none', color: '#64748b' }}>
+          Reset Default
+        </Button>
+        <Button variant="contained" size="small" onClick={onClose} sx={{ borderRadius: '10px', textTransform: 'none', px: 2.5 }}>
+          Done
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function ConfirmDeleteDialog({
+  open,
+  title,
+  message,
+  onConfirm,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  message: string;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pb: 1, color: '#dc2626' }}>
+        <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <AlertTriangle size={20} color="#dc2626" />
+        </Box>
+        <Typography variant="h3" sx={{ fontSize: 17, fontWeight: 800, color: '#1e293b' }}>
+          {title || 'Confirm Deletion'}
+        </Typography>
+      </DialogTitle>
+      <DialogContent sx={{ pt: 1 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ fontSize: 13, lineHeight: 1.6 }}>
+          {message}
+        </Typography>
+        <Typography variant="caption" sx={{ display: 'block', mt: 1.5, color: '#dc2626', fontWeight: 700 }}>
+          ⚠️ This action cannot be undone.
+        </Typography>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2.5, pt: 1, gap: 1 }}>
+        <Button onClick={onClose} variant="outlined" sx={{ borderRadius: 2, textTransform: 'none' }}>
+          Cancel
+        </Button>
+        <Button
+          onClick={() => {
+            onConfirm();
+            onClose();
+          }}
+          variant="contained"
+          sx={{ borderRadius: 2, fontWeight: 750, bgcolor: '#dc2626', '&:hover': { bgcolor: '#b91c1c' }, textTransform: 'none' }}
+          autoFocus
+        >
+          Confirm Delete
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function NewPhaseDialog({
+  open,
+  onClose,
+  onCreate,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreate: (name: string, tags: string[], color: string) => void;
+}) {
+  const isMobile = useMediaQuery('(max-width:600px)');
+  const [name, setName] = useState('');
+  const [tags, setTags] = useState('');
+  const [color, setColor] = useState('#5774E8');
+  const PRESET_COLORS = ['#5774E8', '#9065E8', '#34866F', '#D77B45', '#438DCA', '#C45E8A', '#D16D4D', '#4A8AB2'];
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    const tagArray = tags
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    onCreate(name.trim(), tagArray, color);
+    setName('');
+    setTags('');
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth fullScreen={isMobile} className="phase-dialog form-fullscreen-dialog">
+      <form onSubmit={handleSubmit}>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pb: 1 }}>
+          <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: '#eff4ff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Layers3 size={20} color="#3563e9" />
+          </Box>
+          <Typography variant="h3" sx={{ fontSize: 17, fontWeight: 800 }}>Create New Topic / Phase</Typography>
+        </DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1.5 }}>
+          <TextField
+            label="Topic / Phase Name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            autoFocus
+            fullWidth
+            size="small"
+          />
+          <TextField
+            label="Tags / Skills (comma separated)"
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+            fullWidth
+            size="small"
+          />
+          <Box>
+            <Typography variant="caption" sx={{ fontWeight: 750, color: 'text.secondary', display: 'block', mb: 1 }}>
+              Theme Color
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+              {PRESET_COLORS.map((c) => (
+                <Box
+                  key={c}
+                  onClick={() => setColor(c)}
+                  sx={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: '50%',
+                    bgcolor: c,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: color === c ? '2.5px solid #1e293b' : '2px solid transparent',
+                    boxShadow: color === c ? '0 0 0 2px white' : 'none',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  {color === c && <Check size={14} color="#fff" />}
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, pt: 1 }}>
+          <Button onClick={onClose} variant="outlined" sx={{ textTransform: 'none' }}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="contained" disabled={!name.trim()} sx={{ textTransform: 'none', fontWeight: 750 }}>
+            Create Topic
+          </Button>
+        </DialogActions>
+      </form>
+    </Dialog>
+  );
+}
+
+function TaskDialog({ open, initial, onClose, onSave, orderedPhases }: { open: boolean; initial: Task | null; onClose: () => void; onSave: (task: Omit<Task, 'id' | 'createdAt' | 'done'> & Partial<Pick<Task, 'id' | 'createdAt' | 'done'>>) => void; orderedPhases?: Phase[] }) {
+  const isMobile = useMediaQuery('(max-width:600px)');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [dueDate, setDueDate] = useState('');
@@ -1682,7 +3153,7 @@ function TaskDialog({ open, initial, onClose, onSave }: { open: boolean; initial
     });
   };
 
-  return <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+  return <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" fullScreen={isMobile} className="task-dialog form-fullscreen-dialog">
     <DialogTitle className="dialog-title">
       <span className="dialog-icon task"><ListTodo size={19}/></span>
       <Box>
@@ -1698,7 +3169,6 @@ function TaskDialog({ open, initial, onClose, onSave }: { open: boolean; initial
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           autoFocus
-          placeholder="e.g. Practise binary search, or personal daily goal"
         />
         <FormControl fullWidth>
           <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, fontWeight: 700 }}>
@@ -1708,12 +3178,12 @@ function TaskDialog({ open, initial, onClose, onSave }: { open: boolean; initial
             <ListSubheader disableSticky sx={{ fontWeight: 800 }}>General</ListSubheader>
             <MenuItem value="personal">📌 Personal / Daily Goal</MenuItem>
             <MenuItem value="general">📌 Other / General</MenuItem>
-            {phases.map((phase) => [
+            {(orderedPhases || phases).map((phase, pIdx) => [
               <ListSubheader key={`task-phase-${phase.id}`} disableSticky sx={{ fontWeight: 800, color: 'text.primary' }}>
-                Phase {phase.id}: {phase.name}
+                Topic {String(pIdx + 1).padStart(2, '0')}: {phase.name}
               </ListSubheader>,
               <MenuItem key={`phase-${phase.id}`} value={`phase-${phase.id}`} sx={{ fontWeight: 650 }}>
-                Entire Phase {phase.id}
+                Entire Topic {String(pIdx + 1).padStart(2, '0')}
               </MenuItem>,
               ...phase.topics.map((t) => (
                 <MenuItem key={t.id} value={t.id} sx={{ pl: 4 }}>
@@ -1757,7 +3227,6 @@ function TaskDialog({ open, initial, onClose, onSave }: { open: boolean; initial
           onChange={(e) => setDescription(e.target.value)}
           multiline
           minRows={2}
-          placeholder="Add details, links, or what done looks like…"
         />
       </Stack>
     </DialogContent>
@@ -1771,6 +3240,7 @@ function TaskDialog({ open, initial, onClose, onSave }: { open: boolean; initial
 }
 
 function NoteDialog({ open, initial, onClose, onSave }: { open: boolean; initial: Note | null; onClose: () => void; onSave: (note: Omit<Note, 'id' | 'updatedAt'> & Partial<Pick<Note, 'id' | 'updatedAt'>>) => void }) {
+  const isMobile = useMediaQuery('(max-width:600px)');
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [topicId, setTopicId] = useState('personal');
@@ -1785,7 +3255,7 @@ function NoteDialog({ open, initial, onClose, onSave }: { open: boolean; initial
 
   const submit = () => onSave({ id: initial?.id, title: title.trim() || 'Untitled note', content, topicId, pinned });
 
-  return <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+  return <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" fullScreen={isMobile} className="note-dialog form-fullscreen-dialog">
     <DialogTitle className="dialog-title">
       <span className="dialog-icon note"><NotebookPen size={19}/></span>
       <Box>
@@ -1801,7 +3271,6 @@ function NoteDialog({ open, initial, onClose, onSave }: { open: boolean; initial
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           autoFocus
-          placeholder="e.g. DSA patterns I keep mixing up"
         />
         <TextField
           label="Your note"
@@ -1809,7 +3278,6 @@ function NoteDialog({ open, initial, onClose, onSave }: { open: boolean; initial
           onChange={(e) => setContent(e.target.value)}
           multiline
           minRows={7}
-          placeholder="Write a concept, snippet, mistake, or reminder to yourself…"
         />
         <FormControl fullWidth>
           <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, fontWeight: 700 }}>
@@ -1883,6 +3351,7 @@ function SettingsDialog({
   onImport: (imported: Partial<AppState>) => void;
   onLogout: () => void;
 }) {
+  const isMobile = useMediaQuery('(max-width:600px)');
   const [start, setStart] = useState(state.reminders.startTime);
   const [end, setEnd] = useState(state.reminders.endTime);
   useEffect(() => { setStart(state.reminders.startTime); setEnd(state.reminders.endTime); }, [state.reminders.startTime, state.reminders.endTime, open]);
@@ -1894,12 +3363,12 @@ function SettingsDialog({
     onClose();
   };
   return (
-    <Dialog className="settings-dialog" open={open} onClose={handleDone} fullWidth maxWidth="sm" scroll="paper">
+    <Dialog className="settings-dialog form-fullscreen-dialog" open={open} onClose={handleDone} fullWidth maxWidth="sm" fullScreen={isMobile} scroll="paper">
       <DialogTitle className="dialog-title">
         <span className="dialog-icon focus"><User size={20}/></span>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="h3">Profile & Settings</Typography>
-          <Typography variant="body2" color="text.secondary">Your SDE Orbit workspace & account preferences.</Typography>
+          <Typography variant="body2" color="text.secondary">Your Orbit workspace & account preferences.</Typography>
         </Box>
         <IconButton onClick={handleDone} aria-label="Close profile & settings" sx={{ ml: 'auto' }}><X size={19}/></IconButton>
       </DialogTitle>
@@ -1938,41 +3407,102 @@ function SettingsDialog({
                 <span>Mastered Topics 🎯</span>
               </Box>
             </Box>
+
+            <Divider sx={{ my: 0.5, borderColor: 'rgba(220,230,250,.8)' }} />
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <Typography variant="caption" sx={{ fontSize: 10, fontWeight: 800, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                Developer Profiles & Portfolio
+              </Typography>
+              <Box className="profile-social-links">
+                <a
+                  href={DEV_LINKS.github}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="social-link-btn github"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openExternalUrl(DEV_LINKS.github);
+                  }}
+                >
+                  <Github size={14} />
+                  <span>GitHub</span>
+                  <ArrowUpRight size={12} style={{ opacity: 0.7 }} />
+                </a>
+                <a
+                  href={DEV_LINKS.portfolio}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="social-link-btn portfolio"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openExternalUrl(DEV_LINKS.portfolio);
+                  }}
+                >
+                  <Globe size={14} />
+                  <span>Portfolio</span>
+                  <ArrowUpRight size={12} style={{ opacity: 0.7 }} />
+                </a>
+                <a
+                  href={DEV_LINKS.linkedin}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="social-link-btn linkedin"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openExternalUrl(DEV_LINKS.linkedin);
+                  }}
+                >
+                  <Linkedin size={14} />
+                  <span>LinkedIn</span>
+                  <ArrowUpRight size={12} style={{ opacity: 0.7 }} />
+                </a>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.25, py: 0.8, borderRadius: 2, background: 'rgba(241, 245, 249, 0.8)', border: '1px solid #e2e8f0', mt: 1, maxWidth: '100%', boxSizing: 'border-box', overflow: 'hidden' }}>
+                <Mail size={14} style={{ color: '#64748b', flexShrink: 0 }} />
+                <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155', userSelect: 'all', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {DEV_LINKS.email}
+                </Typography>
+              </Box>
+            </Box>
           </Paper>
 
-          <Paper className="settings-section" elevation={0}>
-            <Box className="settings-row">
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flex: 1, minWidth: 0 }}>
+          <Paper className="settings-section" elevation={0} sx={{ overflow: 'hidden', width: '100%', boxSizing: 'border-box' }}>
+            <Box className="settings-row" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, width: '100%', minWidth: 0, flexWrap: { xs: 'wrap', sm: 'nowrap' } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flex: 1, minWidth: 0, overflow: 'hidden' }}>
                 <span className="dialog-icon note" style={{ width: 40, height: 40, borderRadius: 12, background: '#eff4ff', color: '#3563e9', flexShrink: 0 }}>
                   <FileText size={20}/>
                 </span>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography fontWeight={800}>Resumes & Applications</Typography>
-                  <Typography variant="body2" color="text.secondary">
+                <Box sx={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
+                  <Typography fontWeight={800} sx={{ fontSize: { xs: 13.5, sm: 14 }, lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    Resumes & Applications
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: 11, sm: 12 }, mt: 0.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {(state.resumes || []).length} application{(state.resumes || []).length === 1 ? '' : 's'} saved with attached resumes
                   </Typography>
                 </Box>
               </Box>
-              <Button variant="contained" size="small" onClick={onResumes} sx={{ flexShrink: 0 }}>
+              <Button variant="contained" size="small" onClick={onResumes} sx={{ flexShrink: 0, borderRadius: 2.5, px: 2, minWidth: { xs: '100%', sm: 'fit-content' }, fontWeight: 750 }}>
                 Manage
               </Button>
             </Box>
           </Paper>
 
-          <Paper className="settings-section" elevation={0}>
-            <Box className="settings-row">
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flex: 1, minWidth: 0 }}>
+          <Paper className="settings-section" elevation={0} sx={{ overflow: 'hidden', width: '100%', boxSizing: 'border-box' }}>
+            <Box className="settings-row" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, width: '100%', minWidth: 0, flexWrap: { xs: 'wrap', sm: 'nowrap' } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flex: 1, minWidth: 0, overflow: 'hidden' }}>
                 <span className="dialog-icon note" style={{ width: 40, height: 40, borderRadius: 12, background: '#f5f3ff', color: '#7c3aed', flexShrink: 0 }}>
                   <FolderGit2 size={20}/>
                 </span>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography fontWeight={800}>Projects & Portfolio</Typography>
-                  <Typography variant="body2" color="text.secondary">
+                <Box sx={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
+                  <Typography fontWeight={800} sx={{ fontSize: { xs: 13.5, sm: 14 }, lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    Projects & Portfolio
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: 11, sm: 12 }, mt: 0.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {(state.projects || []).length} project{(state.projects || []).length === 1 ? '' : 's'} with GitHub & live links
                   </Typography>
                 </Box>
               </Box>
-              <Button variant="contained" size="small" onClick={onProjects} sx={{ flexShrink: 0 }}>
+              <Button variant="contained" size="small" onClick={onProjects} sx={{ flexShrink: 0, borderRadius: 2.5, px: 2, minWidth: { xs: '100%', sm: 'fit-content' }, fontWeight: 750 }}>
                 Showcase
               </Button>
             </Box>
@@ -2034,7 +3564,7 @@ function SettingsDialog({
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
                   a.href = url;
-                  a.download = `sde-orbit-backup-${todayLocalISO()}.json`;
+                  a.download = `orbit-backup-${todayLocalISO()}.json`;
                   a.click();
                   setTimeout(() => URL.revokeObjectURL(url), 1000);
                 }}
@@ -2085,6 +3615,7 @@ function SettingsDialog({
   );
 }
 function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { open: boolean; state: AppState; onClose: () => void; onAddNew: () => void; onEdit: (app: ResumeApplication) => void; onDelete: (id: string) => void }) {
+  const isMobile = useMediaQuery('(max-width:600px)');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | ApplicationStatus>('All');
   const resumes = state.resumes || [];
@@ -2100,50 +3631,61 @@ function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { o
   const offerCount = resumes.filter((r) => r.status === 'Offer').length;
 
   return (
-    <Dialog className="resumes-dialog" open={open} onClose={onClose} fullWidth maxWidth="md" scroll="paper">
-      <DialogTitle className="dialog-title">
-        <span className="dialog-icon task"><Briefcase size={20} /></span>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="h3">Resumes & Applications</Typography>
-          <Typography variant="body2" color="text.secondary">Track your job applications and saved resume files (PDF/Word).</Typography>
+    <Dialog className="resumes-dialog form-fullscreen-dialog" open={open} onClose={onClose} fullWidth maxWidth="md" fullScreen={isMobile} scroll="paper">
+      <DialogTitle className="dialog-title" sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' }, gap: 1.5, p: { xs: '16px 16px 12px !important', sm: '20px 24px 16px !important' }, boxSizing: 'border-box', width: '100%' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, flex: 1, minWidth: 0, width: '100%' }}>
+          <span className="dialog-icon task" style={{ flexShrink: 0 }}><Briefcase size={20} /></span>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="h3" sx={{ fontSize: { xs: 16, sm: 18 }, fontWeight: 850 }}>Resumes & Applications</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: 11, sm: 12 }, lineHeight: 1.35, mt: 0.2 }}>
+              Track applications and saved resume files (PDF/Word).
+            </Typography>
+          </Box>
+          <IconButton onClick={onClose} aria-label="Close dialog" sx={{ display: { xs: 'inline-flex', sm: 'none' }, ml: 'auto', flexShrink: 0 }}>
+            <X size={19} />
+          </IconButton>
         </Box>
-        <Button variant="contained" size="small" startIcon={<Plus size={16} />} onClick={onAddNew} sx={{ flexShrink: 0, mr: 1 }}>
-          New application
-        </Button>
-        <IconButton onClick={onClose} aria-label="Close dialog"><X size={19} /></IconButton>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: { xs: 'flex-start', sm: 'flex-end' }, flexShrink: 0, width: { xs: '100%', sm: 'auto' } }}>
+          <Button variant="contained" size="small" startIcon={<Plus size={16} />} onClick={onAddNew} sx={{ borderRadius: 2.5, px: 2, fontWeight: 750, width: { xs: '100%', sm: 'auto' }, minHeight: 38 }}>
+            New application
+          </Button>
+          <IconButton onClick={onClose} aria-label="Close dialog" sx={{ display: { xs: 'none', sm: 'inline-flex' }, ml: 0.5 }}>
+            <X size={19} />
+          </IconButton>
+        </Box>
       </DialogTitle>
       <DialogContent dividers>
         <Box className="resumes-summary-grid">
           <Paper className="resumes-summary-card" elevation={0}>
             <Box className="proj-stat-head">
-              <span>TOTAL APPLICATIONS</span>
-              <span className="proj-stat-icon"><Briefcase size={15} /></span>
+              <span>TOTAL</span>
+              <span className="proj-stat-icon"><Briefcase size={14} /></span>
             </Box>
             <strong>{totalCount}</strong>
-            <span className="proj-stat-sub">Tracked submissions</span>
+            <span className="proj-stat-sub">Tracked</span>
           </Paper>
           <Paper className="resumes-summary-card" elevation={0}>
             <Box className="proj-stat-head">
-              <span>ACTIVE PIPELINE</span>
-              <span className="proj-stat-icon blue"><Activity size={15} /></span>
+              <span>ACTIVE</span>
+              <span className="proj-stat-icon blue"><Activity size={14} /></span>
             </Box>
             <strong style={{ color: '#2563eb' }}>{activeCount}</strong>
-            <span className="proj-stat-sub">Applied / OA / Interview</span>
+            <span className="proj-stat-sub">Pipeline</span>
           </Paper>
           <Paper className="resumes-summary-card" elevation={0}>
             <Box className="proj-stat-head">
-              <span>OFFERS RECEIVED</span>
-              <span className="proj-stat-icon mint"><Trophy size={15} /></span>
+              <span>OFFERS</span>
+              <span className="proj-stat-icon mint"><Trophy size={14} /></span>
             </Box>
             <strong style={{ color: '#16a34a' }}>{offerCount}</strong>
-            <span className="proj-stat-sub">Accepted / In hand</span>
+            <span className="proj-stat-sub">Received</span>
           </Paper>
         </Box>
 
         <Box className="resumes-toolbar">
           <TextField
             size="small"
-            placeholder="Search by company, role, or portal…"
+            placeholder="Search applications…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="resumes-search-field"
@@ -2218,7 +3760,7 @@ function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { o
                   )}
 
                   {app.fileData && isSafeResumeDataUrl(app.fileData) ? (
-                    <Box sx={{ mt: 0.5, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }}>
+                    <Box sx={{ mt: 0.5, width: '100%', maxWidth: '100%', minWidth: 0, overflow: 'hidden' }}>
                       <a
                         href={app.fileData}
                         download={app.fileName || `${app.company}_Resume.pdf`}
@@ -2230,7 +3772,7 @@ function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { o
                         {app.fileSize > 0 && (
                           <span className="resume-filesize-text">({Math.round(app.fileSize / 1024)} KB)</span>
                         )}
-                        <Download size={14} style={{ flexShrink: 0 }} />
+                        <Download size={14} style={{ flexShrink: 0, marginLeft: 'auto' }} />
                       </a>
                     </Box>
                   ) : app.fileData ? (
@@ -2257,6 +3799,7 @@ function ResumesDialog({ open, state, onClose, onAddNew, onEdit, onDelete }: { o
 
 const WHERE_OPTIONS = [
   'LinkedIn',
+  'NxtWave',
   'Company Careers Portal',
   'Employee Referral',
   'Wellfound / AngelList',
@@ -2268,6 +3811,7 @@ const WHERE_OPTIONS = [
 ];
 
 function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; initial: ResumeApplication | null; onClose: () => void; onSave: (draft: Omit<ResumeApplication, 'id' | 'createdAt'> & Partial<Pick<ResumeApplication, 'id' | 'createdAt'>>) => void }) {
+  const isMobile = useMediaQuery('(max-width:600px)');
   const [company, setCompany] = useState('');
   const [role, setRole] = useState('');
   const [whereApplied, setWhereApplied] = useState('LinkedIn');
@@ -2366,16 +3910,16 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
   const isWord = fileName?.endsWith('.doc') || fileName?.endsWith('.docx');
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
-      <DialogTitle className="dialog-title">
-        <span className="dialog-icon note" style={{ background: '#eaf0ff', color: '#3563e9' }}>
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" fullScreen={isMobile} className="resume-form-dialog form-fullscreen-dialog">
+      <DialogTitle className="dialog-title" sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: { xs: '16px 16px 12px !important', sm: '20px 24px 16px !important' }, boxSizing: 'border-box', width: '100%' }}>
+        <span className="dialog-icon note" style={{ background: '#eaf0ff', color: '#3563e9', flexShrink: 0 }}>
           <Briefcase size={20} />
         </span>
-        <Box>
-          <Typography variant="h3">{initial ? 'Edit Application' : 'Save Resume & Application'}</Typography>
-          <Typography color="text.secondary" variant="body2">Attach your tailored resume and track where you applied.</Typography>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="h3" sx={{ fontSize: { xs: 16, sm: 18 }, fontWeight: 850 }}>{initial ? 'Edit Application' : 'Save Resume & Application'}</Typography>
+          <Typography color="text.secondary" variant="body2" sx={{ fontSize: { xs: 11, sm: 12 }, mt: 0.2 }}>Attach tailored resume & track application.</Typography>
         </Box>
-        <IconButton onClick={onClose} aria-label="Close dialog" sx={{ ml: 'auto' }}><X size={19} /></IconButton>
+        <IconButton onClick={onClose} aria-label="Close dialog" sx={{ ml: 'auto', flexShrink: 0 }}><X size={19} /></IconButton>
       </DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ pt: 1 }}>
@@ -2386,14 +3930,12 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
             onChange={(e) => setCompany(e.target.value)}
             autoFocus
             required
-            placeholder="e.g. Google, Amazon, Microsoft, Stripe"
           />
           <TextField
             label="Role / Position"
             value={role}
             onChange={(e) => setRole(e.target.value)}
             required
-            placeholder="e.g. Software Development Engineer (SDE 1)"
           />
           <Box className="form-two-col">
             <FormControl fullWidth>
@@ -2421,7 +3963,6 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
               label="Specify portal or platform"
               value={customWhere}
               onChange={(e) => setCustomWhere(e.target.value)}
-              placeholder="e.g. Career fair, AngelList, direct recruiter"
             />
           )}
 
@@ -2445,9 +3986,9 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
               style={{ display: 'none' }}
             />
             {fileData ? (
-              <Box sx={{ p: 1.8, border: '1px solid #dce5ff', borderRadius: 3, background: '#f4f7ff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, maxWidth: '100%', overflow: 'hidden' }}>
+              <Box sx={{ p: 1.5, border: '1px solid #dce5ff', borderRadius: 3, background: '#f4f7ff', display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' }, justifyContent: 'space-between', gap: 1.2, maxWidth: '100%', boxSizing: 'border-box', overflow: 'hidden' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, minWidth: 0, flex: 1, overflow: 'hidden' }}>
-                  <FileText size={24} color={isWord ? '#1d4ed8' : '#dc2626'} style={{ flexShrink: 0 }} />
+                  <FileText size={22} color={isWord ? '#1d4ed8' : '#dc2626'} style={{ flexShrink: 0 }} />
                   <Box sx={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
                     <Typography
                       fontWeight={750}
@@ -2468,9 +4009,9 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
                     </Typography>
                   </Box>
                 </Box>
-                <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
-                  <Button size="small" onClick={() => fileInputRef.current?.click()}>Change</Button>
-                  <Button size="small" color="error" onClick={removeFile}>Remove</Button>
+                <Box sx={{ display: 'flex', gap: 0.8, justifyContent: { xs: 'flex-end', sm: 'flex-start' }, flexShrink: 0 }}>
+                  <Button size="small" variant="outlined" onClick={() => fileInputRef.current?.click()} sx={{ borderRadius: 2 }}>Change</Button>
+                  <Button size="small" color="error" variant="outlined" onClick={removeFile} sx={{ borderRadius: 2 }}>Remove</Button>
                 </Box>
               </Box>
             ) : (
@@ -2512,7 +4053,6 @@ function ResumeFormDialog({ open, initial, onClose, onSave }: { open: boolean; i
             onChange={(e) => setNotes(e.target.value)}
             multiline
             minRows={2}
-            placeholder="Recruiter name, job link, salary, interview rounds notes…"
           />
         </Stack>
       </DialogContent>
@@ -2537,6 +4077,7 @@ function ProjectFormDialog({
   onClose: () => void;
   onSave: (project: Omit<PortfolioProject, 'id' | 'createdAt' | 'updatedAt'> & Partial<Pick<PortfolioProject, 'id' | 'createdAt' | 'updatedAt'>>) => void;
 }) {
+  const isMobile = useMediaQuery('(max-width:600px)');
   const [title, setTitle] = useState('');
   const [tagline, setTagline] = useState('');
   const [summary, setSummary] = useState('');
@@ -2585,7 +4126,7 @@ function ProjectFormDialog({
   };
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" fullScreen={isMobile} className="project-form-dialog form-fullscreen-dialog">
       <DialogTitle className="dialog-title">
         <span className="dialog-icon note" style={{ background: '#f5f3ff', color: '#7c3aed' }}>
           <FolderGit2 size={20} />
@@ -2608,14 +4149,12 @@ function ProjectFormDialog({
             onChange={(e) => setTitle(e.target.value)}
             autoFocus
             required
-            placeholder="e.g. Orbit Distributed Cache, Real-time Collab Editor"
           />
           <TextField
             label="One-line tagline"
             value={tagline}
             onChange={(e) => setTagline(e.target.value)}
             required
-            placeholder="e.g. High-throughput distributed key-value cache with Raft consensus"
           />
 
           <Box className="form-two-col">
@@ -2655,7 +4194,7 @@ function ProjectFormDialog({
             value={githubUrl}
             onChange={(e) => setGithubUrl(e.target.value)}
             required
-            placeholder="https://github.com/username/project"
+            placeholder="https://github.com/..."
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -2669,7 +4208,7 @@ function ProjectFormDialog({
             label="Live demo URL (optional)"
             value={liveUrl}
             onChange={(e) => setLiveUrl(e.target.value)}
-            placeholder="https://myproject.vercel.app"
+            placeholder="https://..."
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -2683,7 +4222,6 @@ function ProjectFormDialog({
             label="Tech stack (comma-separated)"
             value={techInput}
             onChange={(e) => setTechInput(e.target.value)}
-            placeholder="e.g. React, TypeScript, Node.js, PostgreSQL, Docker, Redis"
           />
 
           <TextField
@@ -2692,7 +4230,6 @@ function ProjectFormDialog({
             onChange={(e) => setSummary(e.target.value)}
             multiline
             minRows={3}
-            placeholder="Describe what the project does, key features, architecture, and who it helps…"
           />
 
           <TextField
@@ -2701,7 +4238,6 @@ function ProjectFormDialog({
             onChange={(e) => setChallenges(e.target.value)}
             multiline
             minRows={2}
-            placeholder="e.g. Solved WebSocket reconnect bursts using Redis pub/sub; optimized DB queries with compound indexes…"
           />
 
           <TextField
@@ -2710,7 +4246,7 @@ function ProjectFormDialog({
             onChange={(e) => setStarStory(e.target.value)}
             multiline
             minRows={3}
-            placeholder="Situation: High latency during peak load&#10;Task: Redesign cache layer&#10;Action: Implemented multi-tier LRU cache with Go&#10;Result: 68% drop in p99 latency"
+            placeholder="Situation, Task, Action, Result..."
           />
         </Stack>
       </DialogContent>
@@ -2780,6 +4316,7 @@ function ReminderDialog({ open, state, onAction, onClose }: { open: boolean; sta
 }
 
 function HistoryDialog({ open, state, onClose }: { open: boolean; state: AppState; onClose: () => void }) {
+  const isMobile = useMediaQuery('(max-width:600px)');
   const items = [...state.reminderHistory, ...state.sessions.map((s) => ({ id: s.id, kind: 'completed' as const, reason: `Focus session · ${s.durationMinutes} minutes on ${topicName(s.topicId)}`, createdAt: s.startedAt }))].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50);
-  return <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm"><DialogTitle className="dialog-title"><span className="dialog-icon focus"><Activity size={19}/></span><Box><Typography variant="h3">Your activity history</Typography><Typography color="text.secondary" variant="body2">A record of showing up, your way.</Typography></Box><IconButton onClick={onClose} sx={{ ml: 'auto' }}><X size={18}/></IconButton></DialogTitle><DialogContent>{items.length === 0 ? <Box className="empty-state compact"><span className="empty-bubble"><Clock3 size={22}/></span><Typography fontWeight={800}>Your history starts here.</Typography><Typography color="text.secondary" variant="body2">Check-ins and focus sessions will appear here.</Typography></Box> : <Box className="history-list">{items.map((item) => <Box className="history-row" key={item.id}><span className={`history-marker kind-${item.kind}`}>{item.kind === 'completed' ? <Check size={14}/> : item.kind === 'skipped' ? <X size={13}/> : <Clock3 size={13}/>}</span><Box sx={{ flex: 1 }}><Typography fontWeight={750}>{item.kind === 'completed' ? 'Completed / checked in' : item.kind === 'skipped' ? 'Skipped check-in' : item.kind === 'snoozed' ? 'Reminder snoozed' : item.kind === 'disabled' ? 'Reminders turned off' : 'Reminder paused'}</Typography><Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>{item.reason}</Typography></Box><Typography variant="caption" color="text.secondary">{new Date(item.createdAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Typography></Box>)}</Box>}</DialogContent><DialogActions className="dialog-actions"><Button onClick={onClose} variant="contained">Done</Button></DialogActions></Dialog>;
+  return <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" fullScreen={isMobile} className="history-dialog form-fullscreen-dialog"><DialogTitle className="dialog-title"><span className="dialog-icon focus"><Activity size={19}/></span><Box><Typography variant="h3">Your activity history</Typography><Typography color="text.secondary" variant="body2">A record of showing up, your way.</Typography></Box><IconButton onClick={onClose} sx={{ ml: 'auto' }}><X size={18}/></IconButton></DialogTitle><DialogContent>{items.length === 0 ? <Box className="empty-state compact"><span className="empty-bubble"><Clock3 size={22}/></span><Typography fontWeight={800}>Your history starts here.</Typography><Typography color="text.secondary" variant="body2">Check-ins and focus sessions will appear here.</Typography></Box> : <Box className="history-list">{items.map((item) => <Box className="history-row" key={item.id}><span className={`history-marker kind-${item.kind}`}>{item.kind === 'completed' ? <Check size={14}/> : item.kind === 'skipped' ? <X size={13}/> : <Clock3 size={13}/>}</span><Box sx={{ flex: 1 }}><Typography fontWeight={750}>{item.kind === 'completed' ? 'Completed / checked in' : item.kind === 'skipped' ? 'Skipped check-in' : item.kind === 'snoozed' ? 'Reminder snoozed' : item.kind === 'disabled' ? 'Reminders turned off' : 'Reminder paused'}</Typography><Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>{item.reason}</Typography></Box><Typography variant="caption" color="text.secondary">{new Date(item.createdAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Typography></Box>)}</Box>}</DialogContent><DialogActions className="dialog-actions"><Button onClick={onClose} variant="contained">Done</Button></DialogActions></Dialog>;
 }
